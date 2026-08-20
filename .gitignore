@@ -1,0 +1,14 @@
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+.env
+.env.*
+!.env.example
+.dev.vars
+*.p8
+*.p12
+*.mobileprovision
+*.cer
+/AGENTS.md

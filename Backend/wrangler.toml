@@ -1,0 +1,10 @@
+name = "starmanager-ai"
+main = "worker.js"
+compatibility_date = "2026-08-20"
+
+[vars]
+OPENAI_TEXT_MODEL = "gpt-5.4"
+OPENAI_IMAGE_MODEL = "gpt-image-2"
+OPENAI_IMAGE_QUALITY = "medium"
+GEMINI_TEXT_MODEL = "gemini-3.7-flash"
+GEMINI_IMAGE_MODEL = "gemini-3.1-flash-image"
