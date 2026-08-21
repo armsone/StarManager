@@ -77,14 +77,14 @@ struct ProfileSettingsView: View {
             Section {
                 HStack {
                     TextField("새 프리셋 이름", text: $presetName)
-                    Button("저장") {
+                    Button("이 기기에 보관") {
                         profileStore.savePreset(named: presetName)
                         presetName = ""
                     }
                     .disabled(presetName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             } header: {
-                Text("프리셋 저장")
+                Text("프리셋 보관")
             }
 
             Section {
@@ -104,7 +104,9 @@ struct ProfileSettingsView: View {
         }
         .frame(maxWidth: 760)
         .frame(maxWidth: .infinity)
-        .navigationTitle("내 설정")
+        .scrollContentBackground(.hidden)
+        .background(BrandTheme.canvasGradient)
+        .navigationTitle("나의 취향")
         .confirmationDialog(
             "기본 작성 지침으로 되돌릴까요?",
             isPresented: $showsRestoreConfirmation,

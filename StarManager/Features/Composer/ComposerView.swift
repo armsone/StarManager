@@ -10,6 +10,8 @@ import ImagePlayground
 struct ComposerView: View {
     private static let maxMediaItems = 8
 
+    var resetRequest = UUID()
+
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject private var profileStore: CreatorProfileStore
@@ -19,6 +21,7 @@ struct ComposerView: View {
     @State private var length = PostLength.medium
     @State private var generatedPost: GeneratedPost?
     @State private var isGenerating = false
+    @State private var generationID: UUID?
     @State private var errorMessage: String?
     @State private var statusMessage: String?
     @State private var previewAspect = PreviewAspect.feed
@@ -29,6 +32,7 @@ struct ComposerView: View {
     @State private var isLoadingMedia = false
     @State private var isGeneratingImage = false
     @State private var isPreparingShare = false
+    @State private var sharePreparationID: UUID?
     @State private var sharePayload: SharePayload?
     @State private var shareMessage: String?
     @State private var shareMessageIsError = false
@@ -45,6 +49,11 @@ struct ComposerView: View {
     @State private var isMediaDropTargeted = false
     @State private var aiPromptShare: AIPromptShare?
     @State private var showsCamera = false
+    @State private var showsWritingOptions = false
+    @State private var externalProviderToOpen: DirectAIProvider?
+    @State private var showsResetConfirmation = false
+    @State private var resetScrollRequest = UUID()
+    @State private var selectedAIChoice = AIChoice.external(.openAI)
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -75,11 +84,21 @@ struct ComposerView: View {
                 hasPositionedInitialScroll = true
                 proxy.scrollTo("composer-top", anchor: .top)
             }
+            .onChange(of: resetScrollRequest) {
+                withAnimation { proxy.scrollTo("composer-top", anchor: .top) }
+            }
         }
-        .background(BrandTheme.canvas)
+        .background(BrandTheme.canvasGradient)
         .background(KeyboardDismissTapInstaller())
         .navigationTitle("스타메니저")
         .navigationBarTitleDisplayMode(.inline)
+        .onChange(of: resetRequest) {
+            if hasComposerContent {
+                showsResetConfirmation = true
+            } else {
+                resetScrollRequest = UUID()
+            }
+        }
         .onChange(of: selectedItems) { _, items in
             guard !items.isEmpty else { return }
             mediaLoadTask?.cancel()
@@ -116,6 +135,26 @@ struct ComposerView: View {
             CameraCaptureView { image in addCameraPhoto(image) }
                 .ignoresSafeArea()
         }
+        .alert(item: $externalProviderToOpen) { provider in
+            Alert(
+                title: Text("\(provider.title) 앱에서 만들까요?"),
+                message: Text("공유 화면에서 \(provider.title) 앱을 선택하세요. 결과를 복사해 돌아오면 스타메니저에서 가져올 수 있습니다."),
+                primaryButton: .default(Text("공유 화면 열기")) {
+                    sharePrompt(with: provider)
+                },
+                secondaryButton: .cancel(Text("취소"))
+            )
+        }
+        .confirmationDialog(
+            "새 이야기로 시작할까요?",
+            isPresented: $showsResetConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("새로 시작", role: .destructive) { resetComposer() }
+            Button("취소", role: .cancel) {}
+        } message: {
+            Text("현재 이야기, 만든 게시물과 미디어를 비웁니다. 내 프로필과 설정은 그대로 유지됩니다.")
+        }
         .starImagePlaygroundSheet(
             isPresented: $showsImagePlayground,
             prompt: imagePlaygroundPrompt,
@@ -134,14 +173,16 @@ struct ComposerView: View {
         return VStack(alignment: .leading, spacing: 18) {
             heroCopy
 
-            TextField("오늘의 이야기", text: $idea, axis: .vertical)
+            TextField("한 줄로 적어 주세요", text: $idea, axis: .vertical)
                 .lineLimit(2...5)
                 .textFieldStyle(.plain)
                 .padding(14)
                 .background(BrandTheme.canvas, in: RoundedRectangle(cornerRadius: 14))
                 .accessibilityHint("게시물의 바탕이 될 짧은 이야기를 입력합니다")
 
-            VStack(alignment: .leading, spacing: 10) {
+            DisclosureGroup(isExpanded: $showsWritingOptions) {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 10) {
                 Text("스타일").font(.subheadline.weight(.semibold))
                 LazyVGrid(
                     columns: generationPresetColumns,
@@ -184,10 +225,10 @@ struct ComposerView: View {
                         .accessibilityHint("선택하면 글자 수를 제외한 말투와 분위기 설정이 적용됩니다")
                         .accessibilityValue(selectedGenerationStyle == preset ? "선택됨" : "선택 안 됨")
                     }
-                }
-            }
+                    }
+                    }
 
-            HStack(spacing: 10) {
+                    HStack(spacing: 10) {
                 Text("분위기")
                     .font(.subheadline.weight(.semibold))
                     .frame(width: 70, alignment: .leading)
@@ -197,9 +238,9 @@ struct ComposerView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-            }
+                    }
 
-            HStack(spacing: 10) {
+                    HStack(spacing: 10) {
                 Text("이야기 비중")
                     .font(.subheadline.weight(.semibold))
                     .frame(width: 70, alignment: .leading)
@@ -207,9 +248,9 @@ struct ComposerView: View {
                     ForEach(PostLength.allCases) { Text($0.storyWeightTitle).tag($0) }
                 }
                 .pickerStyle(.segmented)
-            }
+                    }
 
-            VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     Text("글자 수").font(.subheadline.weight(.semibold))
                     Spacer()
@@ -222,18 +263,21 @@ struct ComposerView: View {
                     .tint(BrandTheme.accent)
                     .accessibilityLabel("글자 수")
                     .accessibilityValue("\(profileStore.profile.controls.characterCount)자")
+                    }
+                }
+                .padding(.top, 12)
+            } label: {
+                Label("느낌 조정", systemImage: "slider.horizontal.3")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(BrandTheme.ink)
             }
 
             aiChoiceButtons
 
             if generatedPost != nil {
                 VStack(alignment: .leading, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("미디어").font(.headline)
-                        Text("사진·영상을 선택하거나 드래그해 최대 \(Self.maxMediaItems)개 추가")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
+                    Text("미디어")
+                        .font(.headline)
 
                     Picker("게시 비율", selection: $previewAspect) {
                         ForEach(PreviewAspect.allCases) { Text($0.title).tag($0) }
@@ -254,7 +298,7 @@ struct ComposerView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.large)
                         .disabled(isLoadingMedia || mediaItems.count >= Self.maxMediaItems)
-                        .accessibilityHint("사진 보관함에서 게시 순서대로 최대 \(Self.maxMediaItems)개를 선택하거나 이 영역으로 드래그합니다")
+                        .accessibilityHint("사진 보관함에서 게시 순서대로 최대 \(Self.maxMediaItems)개를 선택합니다")
 
                         Button(action: openCamera) {
                             Label("카메라", systemImage: "camera.fill")
@@ -295,63 +339,60 @@ struct ComposerView: View {
     }
 
     private var heroCopy: some View {
-        Text("오늘 전하고 싶은 이야기는 무엇인가요?")
+        Text("오늘 어떤 이야기를 전할까요?")
             .font(.system(.title2, design: .rounded, weight: .bold))
             .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
     }
 
     private var aiChoiceButtons: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            LazyVGrid(columns: aiChoiceColumns, spacing: 7) {
+        VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: aiChoiceColumns, spacing: 8) {
                 ForEach(AIChoice.allCases) { choice in
                     Button {
-                        runAI(choice)
+                        selectedAIChoice = choice
                     } label: {
-                        VStack(spacing: 5) {
-                            if isGenerating && choice == .appleIntelligence {
-                                ProgressView()
-                                    .tint(choice.foregroundColor)
-                                    .frame(width: 26, height: 26)
-                            } else {
-                                choice.icon
-                                    .frame(width: 26, height: 26)
-                            }
+                        VStack(spacing: 7) {
+                            choice.icon
+                                .frame(width: 28, height: 28)
                             Text(choice.title)
-                                .font(.caption2.weight(.semibold))
+                                .font(.caption.weight(.semibold))
                                 .lineLimit(1)
-                                .multilineTextAlignment(.center)
+                                .minimumScaleFactor(0.8)
                         }
-                        .foregroundStyle(choice.foregroundColor)
-                        .frame(maxWidth: .infinity, minHeight: 58)
-                        .background(choice.backgroundColor, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+                        .foregroundStyle(BrandTheme.ink)
+                        .frame(maxWidth: .infinity, minHeight: 72)
+                        .background(
+                            selectedAIChoice == choice ? BrandTheme.paper : BrandTheme.surface,
+                            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+                        )
                         .overlay {
                             RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                .stroke(choice.borderColor, lineWidth: 1)
+                                .stroke(selectedAIChoice == choice ? BrandTheme.accent : BrandTheme.border, lineWidth: selectedAIChoice == choice ? 1.5 : 1)
                         }
                     }
                     .buttonStyle(.plain)
-                    .disabled(trimmedIdea.isEmpty || isGenerating)
-                    .opacity(aiChoiceOpacity(for: choice))
-                    .accessibilityHint("\(choice.title)로 바로 만듭니다")
+                    .accessibilityLabel(choice.title)
+                    .accessibilityValue(selectedAIChoice == choice ? "선택됨" : "선택 안 됨")
+                    .accessibilityHint("게시물을 만들 AI를 선택합니다")
                 }
             }
 
-            if isGenerating {
-                HStack(spacing: 10) {
-                    ProgressView()
-                        .tint(BrandTheme.accent)
-                    Text("Apple AI가 게시물을 만드는 중…")
-                        .font(.subheadline.weight(.semibold))
-                    Spacer(minLength: 0)
+            Button {
+                runAI(selectedAIChoice)
+            } label: {
+                HStack(spacing: 9) {
+                    if isGenerating {
+                        ProgressView().tint(.white)
+                    } else {
+                        Image(systemName: "sparkles")
+                    }
+                    Text(isGenerating ? "게시물을 만드는 중…" : selectedAIChoice.actionTitle)
                 }
-                .foregroundStyle(.primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(BrandTheme.accent.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Apple AI가 게시물을 만드는 중입니다")
-                .transition(.opacity.combined(with: .move(edge: .top)))
             }
+            .buttonStyle(GlossyPrimaryButtonStyle())
+            .disabled(trimmedIdea.isEmpty || isGenerating)
+            .opacity(trimmedIdea.isEmpty ? 0.46 : 1)
+            .accessibilityHint(selectedAIChoice.accessibilityHint)
 
             if let provider = pendingExternalProvider {
                 PasteButton(payloadType: String.self) { values in
@@ -374,19 +415,13 @@ struct ComposerView: View {
         case .appleIntelligence:
             Task { await generateDraft() }
         case let .external(provider):
-            sharePrompt(with: provider)
+            externalProviderToOpen = provider
         }
     }
 
     private var aiChoiceColumns: [GridItem] {
         let count = dynamicTypeSize.isAccessibilitySize ? 2 : 4
         return Array(repeating: GridItem(.flexible(), spacing: 7), count: count)
-    }
-
-    private func aiChoiceOpacity(for choice: AIChoice) -> Double {
-        if trimmedIdea.isEmpty { return 0.48 }
-        if isGenerating, choice != .appleIntelligence { return 0.4 }
-        return 1
     }
 
     private var characterCountBinding: Binding<Double> {
@@ -517,7 +552,12 @@ struct ComposerView: View {
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(14)
-                        .background(BrandTheme.paper, in: RoundedRectangle(cornerRadius: 14))
+                        .background(BrandTheme.resultSurface, in: RoundedRectangle(cornerRadius: 14))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14)
+                                .stroke(.white, lineWidth: 1)
+                        }
+                        .shadow(color: BrandTheme.ink.opacity(0.08), radius: 12, y: 5)
                         .accessibilityLabel("생성된 게시물, \(post.characterCount)자")
 
                     Button { Task { await share(post) } } label: {
@@ -527,8 +567,7 @@ struct ComposerView: View {
                         }
                         .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
+                    .buttonStyle(GlossyPrimaryButtonStyle())
                     .disabled(isPreparingShare || isGenerating)
                     .accessibilityHint("문구를 자동으로 복사하고 미디어 공유 화면을 엽니다")
 
@@ -539,6 +578,7 @@ struct ComposerView: View {
                     .font(.caption)
                     .foregroundStyle(shareMessageIsError ? .red : .secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
                 }
             } else {
                 Label("게시물을 만들면 여기에 표시됩니다", systemImage: "text.page")
@@ -599,6 +639,10 @@ struct ComposerView: View {
                 }
             }
         }
+    }
+
+    private var hasComposerContent: Bool {
+        !idea.isEmpty || generatedPost != nil || !mediaItems.isEmpty || !selectedItems.isEmpty || !captionCandidates.isEmpty
     }
 
     private var trimmedIdea: String { idea.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -701,6 +745,37 @@ struct ComposerView: View {
         activeCaptionSource = candidate.source
     }
 
+    @MainActor
+    private func resetComposer() {
+        mediaLoadTask?.cancel()
+        mediaLoadID = UUID()
+        generationID = nil
+        sharePreparationID = nil
+        isGenerating = false
+        isPreparingShare = false
+        idea = ""
+        generatedPost = nil
+        generatedSignature = nil
+        activeCaptionSource = nil
+        captionCandidates.removeAll()
+        selectedItems = []
+        mediaItems.removeAll()
+        errorMessage = nil
+        statusMessage = nil
+        shareMessage = nil
+        shareMessageIsError = false
+        pendingExternalProvider = nil
+        externalProviderToOpen = nil
+        aiPromptShare = nil
+        sharePayload = nil
+        showsCamera = false
+        showsImagePlayground = false
+        isGeneratingImage = false
+        imageGenerationPostID = nil
+        showsWritingOptions = false
+        resetScrollRequest = UUID()
+    }
+
     private func validationContext(for signature: DraftSignature) -> CaptionValidationContext {
         CaptionValidationContext(
             requiredCharacterCount: signature.profile.controls.characterCount,
@@ -719,6 +794,8 @@ struct ComposerView: View {
     @MainActor
     private func generateDraft() async {
         guard !trimmedIdea.isEmpty else { return }
+        let requestID = UUID()
+        generationID = requestID
         isGenerating = true
         errorMessage = nil
         statusMessage = nil
@@ -756,15 +833,21 @@ struct ComposerView: View {
                 signature: signature,
                 requestID: UUID()
             )
+            guard generationID == requestID else { return }
             captionCandidates[source] = candidate
             generatedPost = post
             generatedSignature = signature
             activeCaptionSource = source
             statusMessage = validationReport(for: candidate).passesAllRules ? "완료" : "확인 필요"
         } catch {
-            errorMessage = error.localizedDescription
+            if generationID == requestID {
+                errorMessage = error.localizedDescription
+            }
         }
-        isGenerating = false
+        if generationID == requestID {
+            generationID = nil
+            isGenerating = false
+        }
     }
 
     @MainActor
@@ -772,7 +855,10 @@ struct ComposerView: View {
         isLoadingMedia = true
         errorMessage = nil
         defer {
-            if mediaLoadID == loadID { isLoadingMedia = false }
+            if mediaLoadID == loadID {
+                isLoadingMedia = false
+                selectedItems = []
+            }
         }
         var loaded: [ComposerMedia] = []
         for item in items {
@@ -791,7 +877,6 @@ struct ComposerView: View {
             errorMessage = "선택한 미디어를 불러오지 못했어요."
         } else {
             appendMedia(loaded)
-            selectedItems = []
         }
     }
 
@@ -908,6 +993,8 @@ struct ComposerView: View {
             return
         }
         UIPasteboard.general.string = post.composedText
+        let requestID = UUID()
+        sharePreparationID = requestID
         isPreparingShare = true
         errorMessage = nil
         shareMessage = "공유 준비 중"
@@ -917,6 +1004,10 @@ struct ComposerView: View {
             let prepared = try await Task.detached(priority: .userInitiated) {
                 try Self.prepareShareFiles(from: snapshot)
             }.value
+            guard sharePreparationID == requestID else {
+                try? FileManager.default.removeItem(at: prepared.directory)
+                return
+            }
             let activityItems: [Any]
             if snapshot.count == 1,
                snapshot[0].kind == .image,
@@ -929,10 +1020,15 @@ struct ComposerView: View {
             shareMessageIsError = false
             sharePayload = SharePayload(items: activityItems, cleanupURLs: [prepared.directory])
         } catch {
-            shareMessage = "미디어 공유를 준비하지 못했어요: \(error.localizedDescription)"
-            shareMessageIsError = true
+            if sharePreparationID == requestID {
+                shareMessage = "미디어 공유를 준비하지 못했어요: \(error.localizedDescription)"
+                shareMessageIsError = true
+            }
         }
-        isPreparingShare = false
+        if sharePreparationID == requestID {
+            sharePreparationID = nil
+            isPreparingShare = false
+        }
     }
 
     nonisolated private static func prepareShareFiles(from mediaItems: [ComposerMedia]) throws -> (items: [URL], directory: URL) {
@@ -1183,10 +1279,10 @@ private enum AIChoice: Identifiable, CaseIterable, Equatable {
     case external(DirectAIProvider)
 
     static let allCases: [AIChoice] = [
-        .appleIntelligence,
         .external(.openAI),
         .external(.gemini),
-        .external(.grok)
+        .external(.grok),
+        .appleIntelligence
     ]
 
     var id: String {
@@ -1200,6 +1296,20 @@ private enum AIChoice: Identifiable, CaseIterable, Equatable {
         switch self {
         case .appleIntelligence: "AI"
         case let .external(provider): provider.title
+        }
+    }
+
+    var actionTitle: String {
+        switch self {
+        case .appleIntelligence: "AI로 만들기"
+        case let .external(provider): "\(provider.title)에서 만들기"
+        }
+    }
+
+    var accessibilityHint: String {
+        switch self {
+        case .appleIntelligence: "이 기기 안에서 게시물을 만듭니다"
+        case let .external(provider): "공유 화면을 열어 \(provider.title) 앱에서 게시물을 만듭니다"
         }
     }
 
