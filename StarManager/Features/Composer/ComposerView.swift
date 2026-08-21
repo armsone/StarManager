@@ -8,6 +8,8 @@ import ImagePlayground
 #endif
 
 struct ComposerView: View {
+    private static let maxMediaItems = 8
+
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @EnvironmentObject private var profileStore: CreatorProfileStore
@@ -40,6 +42,7 @@ struct ComposerView: View {
     @State private var imageGenerationPostID: UUID?
     @State private var pendingExternalProvider: DirectAIProvider?
     @State private var draggedMediaID: UUID?
+    @State private var isMediaDropTargeted = false
     @State private var aiPromptShare: AIPromptShare?
     @State private var showsCamera = false
 
@@ -225,7 +228,12 @@ struct ComposerView: View {
 
             if generatedPost != nil {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("미디어").font(.headline)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("미디어").font(.headline)
+                        Text("사진·영상을 선택하거나 드래그해 최대 \(Self.maxMediaItems)개 추가")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
 
                     Picker("게시 비율", selection: $previewAspect) {
                         ForEach(PreviewAspect.allCases) { Text($0.title).tag($0) }
@@ -235,7 +243,7 @@ struct ComposerView: View {
                     HStack(spacing: 10) {
                         PhotosPicker(
                             selection: $selectedItems,
-                            maxSelectionCount: max(1, 10 - mediaItems.count),
+                            maxSelectionCount: max(1, Self.maxMediaItems - mediaItems.count),
                             selectionBehavior: .ordered,
                             matching: .any(of: [.images, .videos]),
                             photoLibrary: .shared()
@@ -245,8 +253,8 @@ struct ComposerView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.large)
-                        .disabled(isLoadingMedia || mediaItems.count >= 10)
-                        .accessibilityHint("사진 보관함에서 게시 순서대로 최대 10개를 선택합니다")
+                        .disabled(isLoadingMedia || mediaItems.count >= Self.maxMediaItems)
+                        .accessibilityHint("사진 보관함에서 게시 순서대로 최대 \(Self.maxMediaItems)개를 선택하거나 이 영역으로 드래그합니다")
 
                         Button(action: openCamera) {
                             Label("카메라", systemImage: "camera.fill")
@@ -254,11 +262,24 @@ struct ComposerView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.large)
-                        .disabled(mediaItems.count >= 10)
+                        .disabled(mediaItems.count >= Self.maxMediaItems)
                         .accessibilityHint("카메라로 사진을 찍어 미디어에 추가합니다")
                     }
 
                     if !mediaItems.isEmpty { mediaOrderEditor }
+                }
+                .contentShape(Rectangle())
+                .onDrop(
+                    of: [UTType.image.identifier, UTType.movie.identifier],
+                    isTargeted: $isMediaDropTargeted,
+                    perform: receiveDroppedMedia
+                )
+                .overlay {
+                    if isMediaDropTargeted {
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(BrandTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                            .allowsHitTesting(false)
+                    }
                 }
             }
 
@@ -769,12 +790,80 @@ struct ComposerView: View {
         if loaded.isEmpty {
             errorMessage = "선택한 미디어를 불러오지 못했어요."
         } else {
-            let availableCount = max(0, 10 - mediaItems.count)
-            let accepted = Array(loaded.prefix(availableCount))
-            mediaItems.append(contentsOf: accepted)
+            appendMedia(loaded)
             selectedItems = []
-            statusMessage = "\(accepted.count)개 추가"
         }
+    }
+
+    private func receiveDroppedMedia(_ providers: [NSItemProvider]) -> Bool {
+        guard !providers.isEmpty else { return false }
+        guard mediaItems.count < Self.maxMediaItems else {
+            errorMessage = "미디어는 최대 \(Self.maxMediaItems)개까지 추가할 수 있어요."
+            return false
+        }
+
+        mediaLoadTask?.cancel()
+        let loadID = UUID()
+        mediaLoadID = loadID
+        mediaLoadTask = Task { await loadDroppedMedia(from: providers, loadID: loadID) }
+        return true
+    }
+
+    @MainActor
+    private func loadDroppedMedia(from providers: [NSItemProvider], loadID: UUID) async {
+        isLoadingMedia = true
+        errorMessage = nil
+        defer {
+            if mediaLoadID == loadID { isLoadingMedia = false }
+        }
+
+        var loaded: [ComposerMedia] = []
+        for provider in providers {
+            if Task.isCancelled { return }
+            let contentTypes = provider.registeredTypeIdentifiers.compactMap(UTType.init)
+            guard let type = contentTypes.first(where: { $0.conforms(to: .movie) })
+                    ?? contentTypes.first(where: { $0.conforms(to: .image) }),
+                  let data = await loadDataRepresentation(from: provider, typeIdentifier: type.identifier),
+                  !data.isEmpty else { continue }
+            guard !Task.isCancelled, mediaLoadID == loadID else { return }
+            loaded.append(ComposerMedia(
+                data: data,
+                kind: type.conforms(to: .movie) ? .video : .image,
+                fileExtension: type.preferredFilenameExtension
+            ))
+        }
+
+        guard !Task.isCancelled, mediaLoadID == loadID else { return }
+        if loaded.isEmpty {
+            errorMessage = "드래그한 미디어를 불러오지 못했어요."
+        } else {
+            appendMedia(loaded)
+        }
+    }
+
+    private func loadDataRepresentation(
+        from provider: NSItemProvider,
+        typeIdentifier: String
+    ) async -> Data? {
+        await withCheckedContinuation { continuation in
+            provider.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, _ in
+                continuation.resume(returning: data)
+            }
+        }
+    }
+
+    private func appendMedia(_ loaded: [ComposerMedia]) {
+        let availableCount = max(0, Self.maxMediaItems - mediaItems.count)
+        let accepted = Array(loaded.prefix(availableCount))
+        guard !accepted.isEmpty else {
+            errorMessage = "미디어는 최대 \(Self.maxMediaItems)개까지 추가할 수 있어요."
+            return
+        }
+        mediaItems.append(contentsOf: accepted)
+        errorMessage = nil
+        statusMessage = loaded.count > accepted.count
+            ? "\(accepted.count)개 추가 · 최대 \(Self.maxMediaItems)개"
+            : "\(accepted.count)개 추가"
     }
 
     private func moveMedia(at index: Int, offset: Int) {
@@ -795,7 +884,7 @@ struct ComposerView: View {
 
     @MainActor
     private func addCameraPhoto(_ image: UIImage) {
-        guard mediaItems.count < 10,
+        guard mediaItems.count < Self.maxMediaItems,
               let data = image.jpegData(compressionQuality: 0.92) else { return }
         mediaItems.append(ComposerMedia(data: data, kind: .image, fileExtension: "jpg"))
         statusMessage = "촬영한 사진 추가"
@@ -805,6 +894,11 @@ struct ComposerView: View {
     private func share(_ post: GeneratedPost) async {
         guard !mediaItems.isEmpty else {
             shareMessage = "사진이나 영상을 먼저 추가해 주세요."
+            shareMessageIsError = true
+            return
+        }
+        guard mediaItems.count <= Self.maxMediaItems else {
+            shareMessage = "미디어는 최대 \(Self.maxMediaItems)개까지 공유할 수 있어요."
             shareMessageIsError = true
             return
         }
@@ -863,7 +957,7 @@ struct ComposerView: View {
 
     @MainActor
     private func makeImageFromPost() async {
-        guard let post = generatedPost, mediaItems.count < 10 else { return }
+        guard let post = generatedPost, mediaItems.count < Self.maxMediaItems else { return }
         isGeneratingImage = true
         errorMessage = nil
 
@@ -909,7 +1003,7 @@ struct ComposerView: View {
             let data = try Data(contentsOf: url)
             guard let sourcePostID = imageGenerationPostID,
                   generatedPost?.id == sourcePostID,
-                  mediaItems.count < 10 else { return }
+                  mediaItems.count < Self.maxMediaItems else { return }
             let fileExtension = url.pathExtension.isEmpty ? "png" : url.pathExtension
             mediaItems.append(ComposerMedia(
                 data: data,
