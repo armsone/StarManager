@@ -1,4 +1,5 @@
 import AVFoundation
+import Photos
 import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
@@ -132,8 +133,15 @@ struct ComposerView: View {
             }
         }
         .fullScreenCover(isPresented: $showsCamera) {
-            CameraCaptureView { image in addCameraPhoto(image) }
-                .ignoresSafeArea()
+            CameraCaptureView(
+                maxCount: Self.maxMediaItems,
+                currentCount: mediaItems.count,
+                onFinish: { photos in addCameraPhotos(photos) },
+                onPhotoLibrarySaveIssue: {
+                    errorMessage = "촬영한 사진을 사진 보관함에 저장하지 못했어요. 설정에서 사진 추가 권한을 확인해 주세요."
+                }
+            )
+            .ignoresSafeArea()
         }
         .alert(item: $externalProviderToOpen) { provider in
             Alert(
@@ -306,8 +314,8 @@ struct ComposerView: View {
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.large)
-                        .disabled(mediaItems.count >= Self.maxMediaItems)
-                        .accessibilityHint("카메라로 사진을 찍어 미디어에 추가합니다")
+                        .disabled(isLoadingMedia || mediaItems.count >= Self.maxMediaItems)
+                        .accessibilityHint("카메라로 여러 장을 연속 촬영해 미디어에 추가합니다")
                     }
 
                     if !mediaItems.isEmpty { mediaOrderEditor }
@@ -968,11 +976,18 @@ struct ComposerView: View {
     }
 
     @MainActor
-    private func addCameraPhoto(_ image: UIImage) {
-        guard mediaItems.count < Self.maxMediaItems,
-              let data = image.jpegData(compressionQuality: 0.92) else { return }
-        mediaItems.append(ComposerMedia(data: data, kind: .image, fileExtension: "jpg"))
-        statusMessage = "촬영한 사진 추가"
+    private func addCameraPhotos(_ photos: [Data]) {
+        let availableCount = max(0, Self.maxMediaItems - mediaItems.count)
+        let accepted = photos.prefix(availableCount)
+        guard !accepted.isEmpty else { return }
+        mediaItems.append(contentsOf: accepted.map {
+            ComposerMedia(data: $0, kind: .image, fileExtension: "jpg")
+        })
+        if mediaItems.count >= Self.maxMediaItems {
+            statusMessage = "촬영한 사진 \(accepted.count)장 추가 · 최대 \(Self.maxMediaItems)개"
+        } else {
+            statusMessage = "촬영한 사진 \(accepted.count)장 추가"
+        }
     }
 
     @MainActor
@@ -1610,7 +1625,10 @@ private struct AIPromptShare: Identifiable {
 }
 
 private struct CameraCaptureView: UIViewControllerRepresentable {
-    let onCapture: (UIImage) -> Void
+    let maxCount: Int
+    let currentCount: Int
+    let onFinish: ([Data]) -> Void
+    let onPhotoLibrarySaveIssue: () -> Void
     @Environment(\.dismiss) private var dismiss
 
     func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
@@ -1619,33 +1637,289 @@ private struct CameraCaptureView: UIViewControllerRepresentable {
         let picker = UIImagePickerController()
         picker.sourceType = .camera
         picker.cameraCaptureMode = .photo
-        picker.cameraFlashMode = .off
+        if UIImagePickerController.isFlashAvailable(for: picker.cameraDevice) {
+            picker.cameraFlashMode = .off
+        }
+        picker.showsCameraControls = false
         picker.delegate = context.coordinator
+        picker.cameraOverlayView = context.coordinator.makeOverlay(for: picker)
         return picker
     }
 
     func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
 
+    @MainActor
     final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
         let parent: CameraCaptureView
+        private weak var picker: UIImagePickerController?
+        private weak var countLabel: UILabel?
+        private weak var doneButton: UIButton?
+        private weak var cancelButton: UIButton?
+        private weak var shutterButton: UIButton?
+        private weak var flipButton: UIButton?
+        private weak var flashButton: UIButton?
+        private var pendingPhotos: [Data] = []
+        private var isCapturing = false
+        private var finishRequested = false
+        private var isCancelled = false
+        private var didFinish = false
+        private var didReportPhotoSaveIssue = false
 
         init(parent: CameraCaptureView) {
             self.parent = parent
+        }
+
+        func makeOverlay(for picker: UIImagePickerController) -> UIView {
+            self.picker = picker
+            let overlay = CameraOverlayView(frame: picker.view.bounds)
+            overlay.backgroundColor = .clear
+            overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+
+            let doneButton = UIButton(type: .system)
+            doneButton.setTitle("완료", for: .normal)
+            doneButton.titleLabel?.font = .preferredFont(forTextStyle: .headline)
+            doneButton.setTitleColor(.white, for: .normal)
+            doneButton.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+            doneButton.layer.cornerRadius = 18
+            doneButton.contentEdgeInsets = UIEdgeInsets(top: 8, left: 18, bottom: 8, right: 18)
+            doneButton.addTarget(self, action: #selector(finishTapped), for: .touchUpInside)
+            doneButton.translatesAutoresizingMaskIntoConstraints = false
+            doneButton.accessibilityLabel = "촬영 완료"
+            doneButton.accessibilityHint = "찍은 사진을 촬영 순서대로 미디어에 추가하고 카메라를 닫습니다"
+            self.doneButton = doneButton
+
+            let cancelButton = UIButton(type: .system)
+            cancelButton.setTitle("취소", for: .normal)
+            cancelButton.titleLabel?.font = .preferredFont(forTextStyle: .headline)
+            cancelButton.setTitleColor(.white, for: .normal)
+            cancelButton.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+            cancelButton.layer.cornerRadius = 18
+            cancelButton.contentEdgeInsets = UIEdgeInsets(top: 8, left: 18, bottom: 8, right: 18)
+            cancelButton.addTarget(self, action: #selector(cancelTapped), for: .touchUpInside)
+            cancelButton.translatesAutoresizingMaskIntoConstraints = false
+            cancelButton.accessibilityLabel = "촬영 취소"
+            cancelButton.accessibilityHint = "이번 촬영에서 찍은 사진을 추가하지 않고 카메라를 닫습니다"
+            self.cancelButton = cancelButton
+
+            let label = UILabel()
+            label.textColor = .white
+            label.font = .preferredFont(forTextStyle: .subheadline)
+            label.textAlignment = .center
+            label.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+            label.layer.cornerRadius = 14
+            label.layer.masksToBounds = true
+            label.translatesAutoresizingMaskIntoConstraints = false
+            countLabel = label
+            updateLabel()
+
+            let shutterButton = UIButton(type: .custom)
+            shutterButton.backgroundColor = .white
+            shutterButton.layer.cornerRadius = 36
+            shutterButton.layer.borderColor = UIColor.white.withAlphaComponent(0.5).cgColor
+            shutterButton.layer.borderWidth = 6
+            shutterButton.addTarget(self, action: #selector(captureTapped), for: .touchUpInside)
+            shutterButton.translatesAutoresizingMaskIntoConstraints = false
+            shutterButton.accessibilityLabel = "사진 촬영"
+            self.shutterButton = shutterButton
+
+            let flipButton = iconButton(systemName: "camera.rotate.fill", accessibilityLabel: "카메라 전환")
+            flipButton.addTarget(self, action: #selector(flipCameraTapped), for: .touchUpInside)
+            flipButton.isHidden = !Self.canFlipCamera
+            self.flipButton = flipButton
+
+            let flashButton = iconButton(systemName: "bolt.slash.fill", accessibilityLabel: "플래시 켜기")
+            flashButton.addTarget(self, action: #selector(toggleFlashTapped), for: .touchUpInside)
+            flashButton.isHidden = !UIImagePickerController.isFlashAvailable(for: picker.cameraDevice)
+            self.flashButton = flashButton
+
+            overlay.addSubview(doneButton)
+            overlay.addSubview(cancelButton)
+            overlay.addSubview(label)
+            overlay.addSubview(shutterButton)
+            overlay.addSubview(flipButton)
+            overlay.addSubview(flashButton)
+
+            NSLayoutConstraint.activate([
+                doneButton.topAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.topAnchor, constant: 12),
+                doneButton.trailingAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+
+                cancelButton.topAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.topAnchor, constant: 12),
+                cancelButton.leadingAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+
+                label.centerYAnchor.constraint(equalTo: doneButton.centerYAnchor),
+                label.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+                cancelButton.trailingAnchor.constraint(lessThanOrEqualTo: label.leadingAnchor, constant: -8),
+                label.trailingAnchor.constraint(lessThanOrEqualTo: doneButton.leadingAnchor, constant: -8),
+                label.widthAnchor.constraint(greaterThanOrEqualToConstant: 64),
+                label.heightAnchor.constraint(greaterThanOrEqualToConstant: 28),
+
+                shutterButton.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+                shutterButton.bottomAnchor.constraint(equalTo: overlay.safeAreaLayoutGuide.bottomAnchor, constant: -24),
+                shutterButton.widthAnchor.constraint(equalToConstant: 72),
+                shutterButton.heightAnchor.constraint(equalTo: shutterButton.widthAnchor),
+
+                flipButton.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
+                flipButton.trailingAnchor.constraint(equalTo: shutterButton.leadingAnchor, constant: -42),
+                flipButton.widthAnchor.constraint(equalToConstant: 48),
+                flipButton.heightAnchor.constraint(equalTo: flipButton.widthAnchor),
+
+                flashButton.centerYAnchor.constraint(equalTo: shutterButton.centerYAnchor),
+                flashButton.leadingAnchor.constraint(equalTo: shutterButton.trailingAnchor, constant: 42),
+                flashButton.widthAnchor.constraint(equalToConstant: 48),
+                flashButton.heightAnchor.constraint(equalTo: flashButton.widthAnchor)
+            ])
+
+            return overlay
+        }
+
+        private func updateLabel() {
+            let totalCount = parent.currentCount + pendingPhotos.count
+            countLabel?.text = "  \(totalCount)/\(parent.maxCount)  "
+            countLabel?.accessibilityLabel = "미디어 \(totalCount)개, 최대 \(parent.maxCount)개"
+        }
+
+        @objc private func finishTapped() {
+            guard !isCancelled, !didFinish else { return }
+            if isCapturing, !finishRequested {
+                finishRequested = true
+                updateControls()
+            } else {
+                // 촬영 콜백이 오지 않아도 두 번째 탭으로 지금까지 찍은 사진을 커밋할 수 있다.
+                finish()
+            }
+        }
+
+        @objc private func cancelTapped() {
+            guard !didFinish else { return }
+            isCancelled = true
+            pendingPhotos.removeAll()
+            updateControls()
+            parent.dismiss()
+        }
+
+        @objc private func captureTapped() {
+            guard !isCapturing, !finishRequested, !isCancelled,
+                  parent.currentCount + pendingPhotos.count < parent.maxCount,
+                  let picker else { return }
+            isCapturing = true
+            updateControls()
+            picker.takePicture()
+        }
+
+        @objc private func flipCameraTapped() {
+            guard !isCapturing, !finishRequested, !isCancelled, let picker else { return }
+            picker.cameraDevice = picker.cameraDevice == .rear ? .front : .rear
+            if UIImagePickerController.isFlashAvailable(for: picker.cameraDevice) {
+                picker.cameraFlashMode = .off
+            }
+            updateFlashButton()
+        }
+
+        @objc private func toggleFlashTapped() {
+            guard !isCapturing, !finishRequested, !isCancelled, let picker else { return }
+            guard UIImagePickerController.isFlashAvailable(for: picker.cameraDevice) else {
+                updateFlashButton()
+                return
+            }
+            picker.cameraFlashMode = picker.cameraFlashMode == .off ? .on : .off
+            updateFlashButton()
+        }
+
+        private func updateFlashButton() {
+            guard let picker, let flashButton else { return }
+            let isAvailable = UIImagePickerController.isFlashAvailable(for: picker.cameraDevice)
+            flashButton.isHidden = !isAvailable
+            let isOn = isAvailable && picker.cameraFlashMode == .on
+            flashButton.setImage(UIImage(systemName: isOn ? "bolt.fill" : "bolt.slash.fill"), for: .normal)
+            flashButton.accessibilityLabel = isOn ? "플래시 끄기" : "플래시 켜기"
+        }
+
+        private func updateControls() {
+            let isBusy = isCapturing || finishRequested || isCancelled || didFinish
+            doneButton?.isEnabled = !isCancelled && !didFinish
+            cancelButton?.isEnabled = !isCancelled && !didFinish
+            shutterButton?.isEnabled = !isBusy && parent.currentCount + pendingPhotos.count < parent.maxCount
+            flipButton?.isEnabled = !isBusy
+            flashButton?.isEnabled = !isBusy
+        }
+
+        private func finish() {
+            guard !isCancelled, !didFinish else { return }
+            didFinish = true
+            updateControls()
+            parent.onFinish(pendingPhotos)
+            pendingPhotos.removeAll()
+            parent.dismiss()
+        }
+
+        private func iconButton(systemName: String, accessibilityLabel: String) -> UIButton {
+            let button = UIButton(type: .system)
+            button.setImage(UIImage(systemName: systemName), for: .normal)
+            button.tintColor = .white
+            button.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+            button.layer.cornerRadius = 24
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.accessibilityLabel = accessibilityLabel
+            return button
+        }
+
+        private static var canFlipCamera: Bool {
+            UIImagePickerController.isCameraDeviceAvailable(.rear) &&
+                UIImagePickerController.isCameraDeviceAvailable(.front)
         }
 
         func imagePickerController(
             _ picker: UIImagePickerController,
             didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]
         ) {
-            if let image = info[.originalImage] as? UIImage {
-                parent.onCapture(image)
+            let data = (info[.originalImage] as? UIImage)?.jpegData(compressionQuality: 0.92)
+            // 취소·완료 뒤 늦게 도착한 콜백이어도 이미 찍힌 사진은 보관함에 남긴다.
+            if let data {
+                saveToPhotoLibrary(data)
             }
-            parent.dismiss()
+            guard !isCancelled, !didFinish else { return }
+            if let data, parent.currentCount + pendingPhotos.count < parent.maxCount {
+                pendingPhotos.append(data)
+            }
+            isCapturing = false
+            updateLabel()
+            updateControls()
+            if finishRequested {
+                finish()
+            }
+        }
+
+        private func saveToPhotoLibrary(_ data: Data) {
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
+                guard status == .authorized || status == .limited else {
+                    Task { @MainActor in self?.reportPhotoSaveIssueOnce() }
+                    return
+                }
+                PHPhotoLibrary.shared().performChanges({
+                    PHAssetCreationRequest.forAsset().addResource(with: .photo, data: data, options: nil)
+                }) { success, _ in
+                    guard !success else { return }
+                    Task { @MainActor in self?.reportPhotoSaveIssueOnce() }
+                }
+            }
+        }
+
+        private func reportPhotoSaveIssueOnce() {
+            guard !didReportPhotoSaveIssue else { return }
+            didReportPhotoSaveIssue = true
+            parent.onPhotoLibrarySaveIssue()
         }
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
-            parent.dismiss()
+            cancelTapped()
         }
+    }
+}
+
+private final class CameraOverlayView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hitView = super.hitTest(point, with: event)
+        return hitView === self ? nil : hitView
     }
 }
 
