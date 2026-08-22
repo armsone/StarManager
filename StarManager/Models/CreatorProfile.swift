@@ -300,6 +300,14 @@ final class CreatorProfileStore: ObservableObject {
     }
 }
 
+/// 스튜디오와 설정 화면이 함께 쓰는 생성 취향 값의 UserDefaults 키.
+/// CreatorProfile JSON에 필드를 더하는 대신 별도 키로 저장해 기존 저장 데이터 호환을 유지한다.
+enum SharedGenerationSettings {
+    static let moodKey = "sharedPostMood"
+    static let storyWeightKey = "sharedStoryWeight"
+    static let stylePresetKey = "sharedGenerationStylePreset"
+}
+
 enum PostLength: String, CaseIterable, Codable, Identifiable, Sendable {
     case short = "짧게"
     case medium = "보통"

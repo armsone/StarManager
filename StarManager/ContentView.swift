@@ -5,6 +5,7 @@ struct ContentView: View {
 
     @State private var selectedTab = Tab.composer
     @State private var resetRequest = UUID()
+    @Environment(\.brandTheme) private var theme
 
     var body: some View {
         TabView(selection: Binding(
@@ -40,7 +41,7 @@ struct ContentView: View {
             }
             .tag(Tab.settings)
         }
-        .foregroundStyle(BrandTheme.ink)
+        .foregroundStyle(theme.ink)
     }
 }
 

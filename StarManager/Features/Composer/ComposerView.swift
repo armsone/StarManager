@@ -15,11 +15,12 @@ struct ComposerView: View {
 
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.brandTheme) private var theme
     @EnvironmentObject private var profileStore: CreatorProfileStore
 
     @State private var idea = ""
-    @State private var mood = PostMood.witty
-    @State private var length = PostLength.medium
+    @AppStorage(SharedGenerationSettings.moodKey) private var mood = PostMood.witty
+    @AppStorage(SharedGenerationSettings.storyWeightKey) private var length = PostLength.medium
     @State private var generatedPost: GeneratedPost?
     @State private var isGenerating = false
     @State private var generationID: UUID?
@@ -38,7 +39,6 @@ struct ComposerView: View {
     @State private var shareMessage: String?
     @State private var shareMessageIsError = false
     @State private var hasPositionedInitialScroll = false
-    @State private var selectedGenerationStyle: GenerationStylePreset? = .generation386
     @State private var generatedSignature: DraftSignature?
     @State private var activeCaptionSource: CaptionSource?
     @State private var captionCandidates: [CaptionSource: CaptionCandidate] = [:]
@@ -50,7 +50,6 @@ struct ComposerView: View {
     @State private var isMediaDropTargeted = false
     @State private var aiPromptShare: AIPromptShare?
     @State private var showsCamera = false
-    @State private var showsWritingOptions = false
     @State private var externalProviderToOpen: DirectAIProvider?
     @State private var showsResetConfirmation = false
     @State private var resetScrollRequest = UUID()
@@ -90,7 +89,7 @@ struct ComposerView: View {
                 withAnimation { proxy.scrollTo("composer-top", anchor: .top) }
             }
         }
-        .background(BrandTheme.canvasGradient)
+        .background(theme.canvasGradient)
         .background(KeyboardDismissTapInstaller())
         .navigationTitle("스타메니저")
         .navigationBarTitleDisplayMode(.inline)
@@ -178,7 +177,7 @@ struct ComposerView: View {
             Button("새로 시작", role: .destructive) { resetComposer() }
             Button("취소", role: .cancel) {}
         } message: {
-            Text("현재 이야기, 만든 게시물과 미디어를 비웁니다. 내 프로필과 설정은 그대로 유지됩니다.")
+            Text("현재 이야기, 만든 게시물과 미디어를 비웁니다. 나의 취향 설정은 그대로 유지됩니다.")
         }
         .starImagePlaygroundSheet(
             isPresented: $showsImagePlayground,
@@ -202,106 +201,23 @@ struct ComposerView: View {
                 .lineLimit(2...5)
                 .textFieldStyle(.plain)
                 .padding(14)
-                .background(BrandTheme.canvas, in: RoundedRectangle(cornerRadius: 14))
+                .background(theme.canvas, in: RoundedRectangle(cornerRadius: 14))
                 .accessibilityHint("게시물의 바탕이 될 짧은 이야기를 입력합니다")
 
-            DisclosureGroup(isExpanded: $showsWritingOptions) {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 10) {
-                Text("스타일").font(.subheadline.weight(.semibold))
-                LazyVGrid(
-                    columns: generationPresetColumns,
-                    spacing: 10
-                ) {
-                    ForEach(GenerationStylePreset.allCases) { preset in
-                        Button {
-                            UIApplication.shared.sendAction(
-                                #selector(UIResponder.resignFirstResponder),
-                                to: nil,
-                                from: nil,
-                                for: nil
-                            )
-                            selectedGenerationStyle = preset
-                            profileStore.profile = preset.applying(to: profileStore.profile)
-                            statusMessage = "\(preset.title) 적용"
-                        } label: {
-                            VStack(spacing: 5) {
-                                Image(systemName: preset.symbolName)
-                                    .font(.system(size: 17, weight: .regular))
-                                    .symbolRenderingMode(.monochrome)
-                                    .foregroundStyle(BrandTheme.accent)
-                                    .frame(width: 30, height: 30)
-                                    .background(BrandTheme.paper, in: Circle())
-                                    .accessibilityHidden(true)
-                                Text(preset.title).font(.subheadline.weight(.semibold))
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 58)
-                            .padding(.vertical, 6)
-                            .background(
-                                selectedGenerationStyle == preset ? BrandTheme.paper : BrandTheme.canvas,
-                                in: RoundedRectangle(cornerRadius: 14)
-                            )
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 14)
-                                    .stroke(selectedGenerationStyle == preset ? BrandTheme.accent : Color.clear, lineWidth: 1.5)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityHint("선택하면 글자 수를 제외한 말투와 분위기 설정이 적용됩니다")
-                        .accessibilityValue(selectedGenerationStyle == preset ? "선택됨" : "선택 안 됨")
-                    }
-                    }
-                    }
-
-                    HStack(spacing: 10) {
-                Text("분위기")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(width: 70, alignment: .leading)
-                Picker("분위기", selection: $mood) {
-                    ForEach(PostMood.allCases) { item in
-                        Text(item.rawValue).tag(item)
-                    }
-                }
-                .pickerStyle(.segmented)
-                    }
-
-                    HStack(spacing: 10) {
-                Text("이야기 비중")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(width: 70, alignment: .leading)
-                Picker("이야기 비중", selection: $length) {
-                    ForEach(PostLength.allCases) { Text($0.storyWeightTitle).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                    }
-
-                    VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("글자 수").font(.subheadline.weight(.semibold))
-                    Spacer()
-                    Text("\(profileStore.profile.controls.characterCount)자")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(BrandTheme.accent)
-                        .monospacedDigit()
-                }
-                Slider(value: characterCountBinding, in: 50...500, step: 10)
-                    .tint(BrandTheme.accent)
-                    .accessibilityLabel("글자 수")
-                    .accessibilityValue("\(profileStore.profile.controls.characterCount)자")
-                    }
-                }
-                .padding(.top, 12)
-            } label: {
-                Label("느낌 조정", systemImage: "slider.horizontal.3")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(BrandTheme.ink)
+            HStack(spacing: 7) {
+                Image(systemName: "paintpalette")
+                    .accessibilityHidden(true)
+                Text("\(mood.rawValue) · 이야기 비중 \(length.storyWeightTitle) · \(profileStore.profile.controls.characterCount)자 — 나의 취향 탭에서 조절")
             }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .accessibilityElement(children: .combine)
 
             aiChoiceButtons
 
             if generatedPost != nil {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("미디어")
+                    BrandSectionTitle(title: "미디어", systemImage: "photo.on.rectangle.angled")
                         .font(.headline)
 
                     Picker("게시 비율", selection: $previewAspect) {
@@ -355,7 +271,7 @@ struct ComposerView: View {
             if let message = errorMessage ?? statusMessage {
                 Label(message, systemImage: errorMessage == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.footnote)
-                    .foregroundStyle(errorMessage == nil ? BrandTheme.accent : .red)
+                    .foregroundStyle(errorMessage == nil ? Color.secondary : Color.red)
                     .transition(.opacity)
             }
         }
@@ -364,9 +280,18 @@ struct ComposerView: View {
     }
 
     private var heroCopy: some View {
-        Text("오늘 어떤 이야기를 전할까요?")
-            .font(.system(.title2, design: .rounded, weight: .bold))
-            .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
+        VStack(alignment: .leading, spacing: 7) {
+            Text("오늘 어떤 이야기를 전할까요?")
+                .font(.system(.title2, design: .rounded, weight: .bold))
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
+
+            if theme.style == .bk {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(theme.accent)
+                    .frame(width: 36, height: 3)
+                    .accessibilityHidden(true)
+            }
+        }
     }
 
     private var aiChoiceButtons: some View {
@@ -384,15 +309,15 @@ struct ComposerView: View {
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.8)
                         }
-                        .foregroundStyle(BrandTheme.ink)
+                        .foregroundStyle(theme.ink)
                         .frame(maxWidth: .infinity, minHeight: 72)
                         .background(
-                            selectedAIChoice == choice ? BrandTheme.paper : BrandTheme.surface,
+                            selectedAIChoice == choice ? theme.selectionFill : theme.surface,
                             in: RoundedRectangle(cornerRadius: 13, style: .continuous)
                         )
                         .overlay {
                             RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                .stroke(selectedAIChoice == choice ? BrandTheme.accent : BrandTheme.border, lineWidth: selectedAIChoice == choice ? 1.5 : 1)
+                                .stroke(selectedAIChoice == choice ? BrandTheme.accent : theme.border, lineWidth: selectedAIChoice == choice ? 1.5 : 1)
                         }
                     }
                     .buttonStyle(.plain)
@@ -451,24 +376,6 @@ struct ComposerView: View {
         return Array(repeating: GridItem(.flexible(), spacing: 7), count: count)
     }
 
-    private var characterCountBinding: Binding<Double> {
-        Binding(
-            get: { Double(profileStore.profile.controls.characterCount) },
-            set: { value in
-                var controls = profileStore.profile.controls
-                controls.characterCount = Int(value)
-                profileStore.profile.controls = controls
-            }
-        )
-    }
-
-    private var generationPresetColumns: [GridItem] {
-        if dynamicTypeSize.isAccessibilitySize {
-            return [GridItem(.flexible())]
-        }
-        return Array(repeating: GridItem(.flexible(), spacing: 8), count: 4)
-    }
-
     private var mediaOrderEditor: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("길게 눌러 순서 변경")
@@ -500,7 +407,10 @@ struct ComposerView: View {
                                     .foregroundStyle(.white)
                                     .padding(.horizontal, 7)
                                     .padding(.vertical, 4)
-                                    .background(BrandTheme.accent, in: Capsule())
+                                    .background(
+                                        theme.style == .bk ? BrandTheme.carbon : Color.black.opacity(0.66),
+                                        in: Capsule()
+                                    )
                                     .padding(6)
                             }
                         }
@@ -526,13 +436,14 @@ struct ComposerView: View {
             }
         }
         .padding(12)
-        .background(BrandTheme.canvas, in: RoundedRectangle(cornerRadius: 14))
+        .background(theme.canvas, in: RoundedRectangle(cornerRadius: 14))
     }
 
     private var previewColumn: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("미리보기").font(.headline)
+                BrandSectionTitle(title: "미리보기", systemImage: "doc.text.image")
+                    .font(.headline)
                 Spacer()
                 if let source = activeCaptionSource {
                     Label(source.title, systemImage: source.symbolName)
@@ -584,7 +495,7 @@ struct ComposerView: View {
                             RoundedRectangle(cornerRadius: 14)
                                 .stroke(.white, lineWidth: 1)
                         }
-                        .shadow(color: BrandTheme.ink.opacity(0.08), radius: 12, y: 5)
+                        .shadow(color: theme.ink.opacity(0.08), radius: 12, y: 5)
                         .accessibilityLabel("생성된 게시물, \(post.characterCount)자")
 
                     Button { Task { await share(post) } } label: {
@@ -622,7 +533,7 @@ struct ComposerView: View {
 
     private var candidateComparison: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("결과 비교")
+            BrandSectionTitle(title: "결과 비교", systemImage: "square.on.square")
                 .font(.subheadline.weight(.semibold))
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -652,7 +563,7 @@ struct ComposerView: View {
                             .frame(width: 220, height: 112, alignment: .topLeading)
                             .padding(12)
                             .background(
-                                activeCaptionSource == candidate.source ? BrandTheme.paper : BrandTheme.canvas,
+                                activeCaptionSource == candidate.source ? theme.selectionFill : theme.canvas,
                                 in: RoundedRectangle(cornerRadius: 14)
                             )
                             .overlay {
@@ -799,7 +710,6 @@ struct ComposerView: View {
         showsImagePlayground = false
         isGeneratingImage = false
         imageGenerationPostID = nil
-        showsWritingOptions = false
         resetScrollRequest = UUID()
     }
 
@@ -1465,9 +1375,11 @@ private struct MediaPreview: View {
     let aspect: CGFloat
     let isLoading: Bool
 
+    @Environment(\.brandTheme) private var theme
+
     var body: some View {
         ZStack {
-            BrandTheme.paper
+            theme.paper
             if isLoading {
                 ProgressView("미디어 불러오는 중")
             } else if !items.isEmpty {
@@ -1482,7 +1394,7 @@ private struct MediaPreview: View {
                                     Text("영상").font(.subheadline.weight(.medium))
                                 }
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                                .foregroundStyle(BrandTheme.accent)
+                                .foregroundStyle(theme.ink)
                             }
                             Text("\(index + 1)/\(items.count)")
                                 .font(.caption.bold())
@@ -1541,13 +1453,14 @@ private enum MediaKind: String, Sendable {
 
 private struct MediaThumbnail: View {
     let media: ComposerMedia
+    @Environment(\.brandTheme) private var theme
     @State private var videoThumbnailData: Data?
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             thumbnail
                 .frame(width: 104, height: 118)
-                .background(BrandTheme.paper)
+                .background(theme.paper)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -1577,7 +1490,7 @@ private struct MediaThumbnail: View {
             Image(uiImage: image).resizable().scaledToFill()
         } else {
             ZStack {
-                BrandTheme.canvas
+                theme.canvas
                 ProgressView()
             }
         }
