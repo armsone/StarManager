@@ -55,6 +55,7 @@ struct ComposerView: View {
     @State private var showsResetConfirmation = false
     @State private var resetScrollRequest = UUID()
     @State private var selectedAIChoice = AIChoice.external(.openAI)
+    @AppStorage("hasShownPastePermissionGuidance") private var hasShownPastePermissionGuidance = false
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -93,6 +94,18 @@ struct ComposerView: View {
         .background(KeyboardDismissTapInstaller())
         .navigationTitle("스타메니저")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("취소") {
+                    if hasComposerContent {
+                        showsResetConfirmation = true
+                    } else {
+                        resetComposer()
+                    }
+                }
+                .accessibilityHint("작성 중인 이야기와 미디어를 비우고 처음 화면으로 돌아갑니다")
+            }
+        }
         .onChange(of: resetRequest) {
             if hasComposerContent {
                 showsResetConfirmation = true
@@ -127,6 +140,10 @@ struct ComposerView: View {
                     errorMessage = "\(payload.provider.title)로 보내지 못했어요: \(error.localizedDescription)"
                 } else if completed {
                     statusMessage = "\(payload.provider.title)로 보냄 · 결과를 복사해 돌아오세요"
+                    if !hasShownPastePermissionGuidance {
+                        hasShownPastePermissionGuidance = true
+                        statusMessage = "\(payload.provider.title)로 보냄 · 결과를 복사해 돌아오세요. 붙여넣기가 막히면 설정 > 앱 > StarManager > 다른 앱에서 붙여넣기 > 허용"
+                    }
                 } else {
                     statusMessage = "보내기 취소 · 요청문은 복사됨"
                 }
@@ -422,6 +439,8 @@ struct ComposerView: View {
         switch choice {
         case .appleIntelligence:
             Task { await generateDraft() }
+        case .external(.gemini):
+            sharePrompt(with: .gemini)
         case let .external(provider):
             externalProviderToOpen = provider
         }
