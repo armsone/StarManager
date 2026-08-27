@@ -9,6 +9,7 @@ struct ProfileSettingsView: View {
     @AppStorage(SharedGenerationSettings.moodKey) private var mood = PostMood.witty
     @AppStorage(SharedGenerationSettings.storyWeightKey) private var length = PostLength.medium
     @AppStorage(SharedGenerationSettings.stylePresetKey) private var selectedGenerationStyleRaw = GenerationStylePreset.generation386.rawValue
+    @AppStorage(SharedGenerationSettings.showsExternalAIBrowserKey) private var showsExternalAIBrowser = false
     @State private var presetName = ""
     @State private var loginProvider: ExternalAIProvider?
 
@@ -130,6 +131,9 @@ struct ProfileSettingsView: View {
             }
 
             Section {
+                Toggle("브라우저 보기", isOn: $showsExternalAIBrowser)
+                    .accessibilityHint("켜면 외부 AI가 글을 만드는 브라우저를 처음부터 보여줍니다")
+
                 ForEach(ExternalAIProvider.allCases) { provider in
                     Button {
                         loginProvider = provider
@@ -147,7 +151,7 @@ struct ProfileSettingsView: View {
             } header: {
                 BrandSectionTitle(title: "외부 AI 로그인 관리", systemImage: "person.badge.key.fill")
             } footer: {
-                Text("처음 열면 각 서비스의 공식 로그인 페이지가 떠요. 한 번 로그인하면 이 기기에서는 서비스가 로그아웃시키기 전까지 기억돼요. 스타매니저는 비밀번호를 보거나 저장하지 않아요.")
+                Text("브라우저 보기는 기본적으로 꺼져 있어요. 켜면 글을 만드는 과정을 처음부터 볼 수 있어요. 한 번 로그인하면 이 기기에서는 서비스가 로그아웃시키기 전까지 기억돼요. 스타매니저는 비밀번호를 보거나 저장하지 않아요.")
             }
 
             Section {

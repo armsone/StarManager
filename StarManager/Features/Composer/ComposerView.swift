@@ -19,8 +19,10 @@ struct ComposerView: View {
     @EnvironmentObject private var profileStore: CreatorProfileStore
 
     @State private var idea = ""
+    @FocusState private var isIdeaFocused: Bool
     @AppStorage(SharedGenerationSettings.moodKey) private var mood = PostMood.witty
     @AppStorage(SharedGenerationSettings.storyWeightKey) private var length = PostLength.medium
+    @AppStorage(SharedGenerationSettings.showsExternalAIBrowserKey) private var showsExternalAIBrowser = false
     @State private var generatedPost: GeneratedPost?
     @State private var isGenerating = false
     @State private var generationID: UUID?
@@ -46,10 +48,13 @@ struct ComposerView: View {
     @State private var imagePlaygroundPrompt = ""
     @State private var imageGenerationPostID: UUID?
     @State private var pendingExternalProvider: ExternalAIProvider?
+    @State private var activeExternalProvider: ExternalAIProvider?
+    @State private var externalSubmittedAt: Date?
+    @State private var elapsedSeconds = 0
+    @State private var browserContext: ExternalAIBrowserContext?
     @State private var draggedMediaID: UUID?
     @State private var isMediaDropTargeted = false
     @State private var showsCamera = false
-    @State private var browsingProvider: ExternalAIProvider?
     @State private var showsResetConfirmation = false
     @State private var resetScrollRequest = UUID()
     @AppStorage("hasShownPastePermissionGuidance") private var hasShownPastePermissionGuidance = false
@@ -86,9 +91,52 @@ struct ComposerView: View {
             .onChange(of: resetScrollRequest) {
                 withAnimation { proxy.scrollTo("composer-top", anchor: .top) }
             }
+            .task(id: externalSubmittedAt) {
+                guard let submittedAt = externalSubmittedAt else {
+                    elapsedSeconds = 0
+                    return
+                }
+                while !Task.isCancelled && isGenerating {
+                    let elapsed = max(0, Int(Date().timeIntervalSince(submittedAt)))
+                    elapsedSeconds = elapsed
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+            }
         }
         .background(theme.canvasGradient)
         .background(KeyboardDismissTapInstaller())
+        .background {
+            if let provider = activeExternalProvider, browserContext == nil {
+                ExternalAIHiddenAutomatorView(
+                    provider: provider,
+                    prompt: externalPrompt,
+                    generationID: generationID,
+                    onSubmitted: { date in
+                        externalSubmittedAt = date
+                        elapsedSeconds = 0
+                        statusMessage = "정보를 보냈어요"
+                    },
+                    onSuccess: { text in
+                        importAIResult(text, from: provider)
+                    },
+                    onFallback: { reason in
+                        browserContext = ExternalAIBrowserContext(provider: provider, fallbackReason: reason)
+                    },
+                    onError: { err in
+                        errorMessage = err
+                        activeExternalProvider = nil
+                        externalSubmittedAt = nil
+                        elapsedSeconds = 0
+                        isGenerating = false
+                    }
+                )
+                .id(generationID)
+                .frame(width: 375, height: 667)
+                .opacity(0.001)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
         .navigationTitle("스타메니저")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -131,17 +179,40 @@ struct ComposerView: View {
                 }
             }
         }
-        .fullScreenCover(item: $browsingProvider) { provider in
+        .fullScreenCover(item: $browserContext) { context in
             ExternalAIBrowserSheet(
-                provider: provider,
+                provider: context.provider,
                 prompt: externalPrompt,
-                onImport: { text in importAIResult(text, from: provider) },
+                fallbackReason: context.fallbackReason,
+                onSubmitted: { date in
+                    externalSubmittedAt = date
+                    elapsedSeconds = 0
+                    statusMessage = "정보를 보냈어요"
+                },
+                onError: { message in
+                    errorMessage = message
+                    externalSubmittedAt = nil
+                    elapsedSeconds = 0
+                    isGenerating = false
+                    activeExternalProvider = nil
+                },
+                onImport: { text in
+                    importAIResult(text, from: context.provider)
+                    browserContext = nil
+                },
                 onManualCopyFallback: {
                     statusMessage = "문구 복사됨 · 직접 붙여넣고, 답변은 복사해서 붙여넣기로 가져오세요"
                     if !hasShownPastePermissionGuidance {
                         hasShownPastePermissionGuidance = true
                         statusMessage = "문구 복사됨 · 붙여넣기가 막히면 설정 > 앱 > StarManager > 다른 앱에서 붙여넣기 > 허용"
                     }
+                },
+                onDismiss: {
+                    if isGenerating {
+                        isGenerating = false
+                        activeExternalProvider = nil
+                    }
+                    browserContext = nil
                 }
             )
         }
@@ -189,6 +260,8 @@ struct ComposerView: View {
                 .textFieldStyle(.plain)
                 .padding(14)
                 .background(theme.canvas, in: RoundedRectangle(cornerRadius: 14))
+                .disabled(isGenerating)
+                .focused($isIdeaFocused)
                 .accessibilityHint("게시물의 바탕이 될 짧은 이야기를 입력합니다")
 
             HStack(spacing: 7) {
@@ -315,7 +388,31 @@ struct ComposerView: View {
                 }
             }
 
-            if let provider = pendingExternalProvider {
+            if isGenerating {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .progressViewStyle(.circular)
+                        .tint(BrandTheme.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(generatingStatusTitle)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(theme.ink)
+                        Text(generatingStatusSubtitle)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(10)
+                .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(BrandTheme.accent.opacity(0.35), lineWidth: 1)
+                }
+                .transition(.opacity)
+            }
+
+            if let provider = pendingExternalProvider, !isGenerating {
                 PasteButton(payloadType: String.self) { values in
                     guard let text = values.first else { return }
                     importAIResult(text, from: provider)
@@ -330,26 +427,79 @@ struct ComposerView: View {
         .animation(.easeInOut(duration: 0.2), value: isGenerating)
     }
 
-    @MainActor
-    private func runAI(_ choice: AIChoice) {
-        switch choice {
-        case .appleIntelligence:
-            Task { await generateDraft() }
-        case let .external(provider):
-            openExternalBrowser(for: provider)
+    private var generatingStatusTitle: String {
+        if let provider = activeExternalProvider {
+            if let _ = externalSubmittedAt {
+                if elapsedSeconds == 0 {
+                    return "정보를 보냈어요"
+                } else {
+                    let timeFormatted = Self.formatElapsedSeconds(elapsedSeconds)
+                    return "답변을 기다리는 중 (\(timeFormatted))"
+                }
+            }
+            return "\(provider.title)에 연결하는 중…"
+        }
+        return "AI가 글을 쓰는 중이에요…"
+    }
+
+    private var generatingStatusSubtitle: String {
+        if let _ = activeExternalProvider {
+            if let _ = externalSubmittedAt {
+                if elapsedSeconds == 0 {
+                    return "답변을 기다리는 중 (00초)"
+                } else {
+                    return "글이 완성되면 자동으로 채워져요"
+                }
+            }
+            return "입력창을 준비하고 있어요"
+        }
+        return "잠시만 기다려 주세요"
+    }
+
+    private static func formatElapsedSeconds(_ seconds: Int) -> String {
+        if seconds < 60 {
+            return String(format: "%02d초", seconds)
+        } else {
+            let minutes = seconds / 60
+            let remainingSeconds = seconds % 60
+            return String(format: "%d분 %02d초", minutes, remainingSeconds)
         }
     }
 
     @MainActor
-    private func openExternalBrowser(for provider: ExternalAIProvider) {
+    private func runAI(_ choice: AIChoice) {
+        guard !isGenerating else { return }
+        switch choice {
+        case .appleIntelligence:
+            Task { await generateDraft() }
+        case let .external(provider):
+            startExternalGeneration(for: provider)
+        }
+    }
+
+    @MainActor
+    private func startExternalGeneration(for provider: ExternalAIProvider) {
         guard !trimmedIdea.isEmpty else {
             errorMessage = "이야기를 입력해 주세요."
             return
         }
-        errorMessage = nil
-        statusMessage = nil
+        let requestID = UUID()
+        generationID = requestID
+        isGenerating = true
+        activeExternalProvider = provider
         pendingExternalProvider = provider
-        browsingProvider = provider
+        externalSubmittedAt = nil
+        elapsedSeconds = 0
+        errorMessage = nil
+        statusMessage = "\(provider.title)에 연결하는 중…"
+        shareMessage = nil
+        shareMessageIsError = false
+        generatedPost = nil
+        generatedSignature = nil
+        activeCaptionSource = nil
+        if showsExternalAIBrowser {
+            browserContext = ExternalAIBrowserContext(provider: provider)
+        }
     }
 
     private var mediaOrderEditor: some View {
@@ -556,7 +706,7 @@ struct ComposerView: View {
     }
 
     private var hasComposerContent: Bool {
-        !idea.isEmpty || generatedPost != nil || !mediaItems.isEmpty || !selectedItems.isEmpty || !captionCandidates.isEmpty
+        !idea.isEmpty || generatedPost != nil || !mediaItems.isEmpty || !selectedItems.isEmpty || !captionCandidates.isEmpty || isGenerating
     }
 
     private var trimmedIdea: String { idea.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -599,8 +749,11 @@ struct ComposerView: View {
     private func importAIResult(_ text: String, from provider: ExternalAIProvider) {
         guard !text.isEmpty else {
             errorMessage = "복사한 결과가 비어 있어요."
+            activeExternalProvider = nil
+            isGenerating = false
             return
         }
+        isIdeaFocused = false
         let signature = currentDraftSignature
         let lines = text.components(separatedBy: "\n")
         let hashtags = (lines.first ?? "").split(separator: " ").compactMap { token -> String? in
@@ -625,6 +778,10 @@ struct ComposerView: View {
         captionCandidates[candidate.source] = candidate
         useCandidate(candidate)
         pendingExternalProvider = nil
+        activeExternalProvider = nil
+        externalSubmittedAt = nil
+        elapsedSeconds = 0
+        isGenerating = false
         errorMessage = nil
         statusMessage = validationReport(for: candidate).passesAllRules ? "\(provider.title) 결과 가져옴" : "가져옴 · 기준 확인 필요"
     }
@@ -660,7 +817,10 @@ struct ComposerView: View {
         shareMessage = nil
         shareMessageIsError = false
         pendingExternalProvider = nil
-        browsingProvider = nil
+        activeExternalProvider = nil
+        externalSubmittedAt = nil
+        elapsedSeconds = 0
+        browserContext = nil
         sharePayload = nil
         showsCamera = false
         showsImagePlayground = false
@@ -690,8 +850,9 @@ struct ComposerView: View {
         let requestID = UUID()
         generationID = requestID
         isGenerating = true
+        activeExternalProvider = nil
         errorMessage = nil
-        statusMessage = nil
+        statusMessage = "AI가 글을 쓰는 중이에요…"
         shareMessage = nil
         shareMessageIsError = false
         generatedPost = nil

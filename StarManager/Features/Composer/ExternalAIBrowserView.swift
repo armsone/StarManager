@@ -23,13 +23,187 @@ enum ExternalAIProvider: String, CaseIterable, Identifiable, Sendable, Hashable 
     }
 }
 
+enum ExternalAIFallbackReason: String, Identifiable, Sendable {
+    case login
+    case captcha
+    case interaction
+    case timeout
+    case navigation
+
+    var id: String { rawValue }
+
+    var userMessage: String {
+        switch self {
+        case .login: "로그인이 필요해요"
+        case .captcha: "보안 확인이 필요해요"
+        case .interaction: "화면 확인이 필요해요"
+        case .timeout: "입력창을 찾지 못했어요"
+        case .navigation: "다른 페이지로 이동했어요"
+        }
+    }
+
+    var detailMessage: String {
+        switch self {
+        case .login: "서비스에 로그인하면 자동으로 글을 이어서 써요."
+        case .captcha: "보안 확인을 마치면 자동으로 글을 이어서 써요."
+        case .interaction: "화면을 직접 확인하고 필요한 버튼을 눌러 주세요."
+        case .timeout: "화면에서 로그인이나 입력을 직접 확인해 주세요."
+        case .navigation: "원래 대화 화면으로 돌아가거나 직접 확인해 주세요."
+        }
+    }
+
+    var iconName: String {
+        switch self {
+        case .login: "person.crop.circle.badge.exclamationmark"
+        case .captcha: "shield.lefthalf.filled"
+        case .interaction: "hand.tap.fill"
+        case .timeout: "clock.badge.exclamationmark"
+        case .navigation: "arrow.triangle.turn.up.right.diamond.fill"
+        }
+    }
+}
+
+struct ExternalAIBrowserContext: Identifiable, Sendable, Equatable {
+    let id = UUID()
+    let provider: ExternalAIProvider
+    let fallbackReason: ExternalAIFallbackReason?
+
+    init(provider: ExternalAIProvider, fallbackReason: ExternalAIFallbackReason? = nil) {
+        self.provider = provider
+        self.fallbackReason = fallbackReason
+    }
+}
+
+/// 백그라운드에서 실행되는 숨겨진 자동화 뷰.
+/// 화면에 직접 보이지 않고 DOM 자동 입력을 수행하며,
+/// 로그인·캡차 등의 사용자 개입이 필요한 경우 즉시 폴백을 요청한다.
+struct ExternalAIHiddenAutomatorView: View {
+    let provider: ExternalAIProvider
+    let prompt: String
+    let generationID: UUID?
+    var onSubmitted: ((Date) -> Void)? = nil
+    let onSuccess: (String) -> Void
+    let onFallback: (ExternalAIFallbackReason) -> Void
+    let onError: (String) -> Void
+
+    @StateObject private var bridge = ExternalAIBrowserBridge()
+    @State private var hasSubmitted = false
+    @State private var hasImported = false
+    @State private var hasTriggeredFallback = false
+
+    var body: some View {
+        ExternalAIWebView(provider: provider, bridge: bridge)
+            .id(generationID)
+            .frame(width: 375, height: 667)
+            .task(id: bridge.navigationGeneration) {
+                await handleNavigationUpdate()
+            }
+            .onChange(of: generationID) { _, _ in
+                hasSubmitted = false
+                hasImported = false
+                hasTriggeredFallback = false
+            }
+            .onChange(of: bridge.isAnswerStable) { _, stable in
+                guard stable, !bridge.latestAnswer.isEmpty, !hasImported, !hasTriggeredFallback else { return }
+                hasImported = true
+                let cleaned = ExternalAIBrowserSheet.cleanedImportedAnswer(bridge.latestAnswer, provider: provider)
+                if !cleaned.isEmpty {
+                    UIPasteboard.general.string = cleaned
+                    onSuccess(cleaned)
+                }
+            }
+            .onChange(of: bridge.isGenerating) { _, isGen in
+                if isGen, !hasSubmitted {
+                    hasSubmitted = true
+                    onSubmitted?(Date())
+                }
+            }
+            .onChange(of: bridge.interactionReason) { _, reason in
+                guard let reason, !hasImported, !hasTriggeredFallback else { return }
+                hasTriggeredFallback = true
+                onFallback(reason)
+            }
+            .onChange(of: bridge.detectedError) { _, error in
+                guard let error, !error.isEmpty, !hasImported, !hasTriggeredFallback else { return }
+                hasTriggeredFallback = true
+                let sanitized = ExternalAIBrowserBridge.sanitizeErrorMessage(error, provider: provider)
+                onError(sanitized)
+            }
+    }
+
+    private func handleNavigationUpdate() async {
+        guard !hasSubmitted, !hasImported, !hasTriggeredFallback else { return }
+        let deadline = Date().addingTimeInterval(35)
+        var checkCount = 0
+
+        while !Task.isCancelled, Date() < deadline, !hasSubmitted, !hasImported, !hasTriggeredFallback {
+            if let error = bridge.detectedError, !error.isEmpty {
+                hasTriggeredFallback = true
+                let sanitized = ExternalAIBrowserBridge.sanitizeErrorMessage(error, provider: provider)
+                onError(sanitized)
+                return
+            }
+
+            if let reason = bridge.interactionReason {
+                hasTriggeredFallback = true
+                onFallback(reason)
+                return
+            }
+
+            if bridge.isPageReady {
+                checkCount += 1
+                let filled = await bridge.fillPrompt(prompt, force: false)
+                if filled {
+                    if await submitPromptWhenReady() {
+                        return
+                    }
+                } else if checkCount >= 12 { // 약 8초 동안 입력창 미발견 시 로그인/개입 필요 판단
+                    if let reason = bridge.interactionReason {
+                        hasTriggeredFallback = true
+                        onFallback(reason)
+                    } else {
+                        hasTriggeredFallback = true
+                        onFallback(.login)
+                    }
+                    return
+                }
+            }
+            try? await Task.sleep(nanoseconds: 700_000_000)
+        }
+
+        if !Task.isCancelled, !hasSubmitted, !hasImported, !hasTriggeredFallback {
+            hasTriggeredFallback = true
+            onFallback(.timeout)
+        }
+    }
+
+    private func submitPromptWhenReady() async -> Bool {
+        guard !hasSubmitted else { return true }
+        let deadline = Date().addingTimeInterval(15)
+        while !Task.isCancelled, Date() < deadline, !hasSubmitted, !hasTriggeredFallback {
+            if await bridge.submitPrompt() {
+                hasSubmitted = true
+                onSubmitted?(Date())
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return hasSubmitted
+    }
+}
+
 /// ChatGPT·Gemini·Claude 웹사이트를 앱 안에서 열어 프롬프트를 채워 넣고,
 /// 완성된 답변을 감지해 가져올 수 있게 해 주는 화면.
+/// 사용자 개입이 필요한 경우 상단에 안내 배너를 함께 표시한다.
 struct ExternalAIBrowserSheet: View {
     let provider: ExternalAIProvider
     let prompt: String
+    var fallbackReason: ExternalAIFallbackReason? = nil
+    var onSubmitted: ((Date) -> Void)? = nil
+    var onError: ((String) -> Void)? = nil
     let onImport: (String) -> Void
     let onManualCopyFallback: () -> Void
+    var onDismiss: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var bridge = ExternalAIBrowserBridge()
@@ -39,66 +213,136 @@ struct ExternalAIBrowserSheet: View {
     @State private var isAutoFilling = false
     @State private var hasSubmittedPrompt = false
     @State private var submitFailed = false
+    @State private var submittedAt: Date?
+    @State private var elapsedSeconds = 0
+    @State private var detectedErrorMessage: String?
 
     var body: some View {
         NavigationStack {
-            ExternalAIWebView(provider: provider, bridge: bridge)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("닫기") { dismiss() }
+            VStack(spacing: 0) {
+                if let reason = fallbackReason {
+                    fallbackBanner(reason)
+                }
+                if let detectedErrorMessage {
+                    errorBanner(detectedErrorMessage)
+                }
+                ExternalAIWebView(provider: provider, bridge: bridge)
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("닫기") {
+                        onDismiss?()
+                        dismiss()
                     }
-                    ToolbarItem(placement: .principal) {
-                        VStack(spacing: 2) {
-                            Text("\(provider.title)에서 만들기")
-                                .font(.subheadline.weight(.semibold))
-                            Label(statusText, systemImage: statusIcon)
-                                .font(.caption2)
-                                .foregroundStyle(statusColor)
-                                .lineLimit(1)
-                        }
+                }
+                ToolbarItem(placement: .principal) {
+                    VStack(spacing: 2) {
+                        Text("\(provider.title)에서 만들기")
+                            .font(.subheadline.weight(.semibold))
+                        Label(statusText, systemImage: statusIcon)
+                            .font(.caption2)
+                            .foregroundStyle(statusColor)
+                            .lineLimit(1)
                     }
-                    ToolbarItemGroup(placement: .confirmationAction) {
-                        if !bridge.latestAnswer.isEmpty, !hasImported {
-                            Button {
-                                importAnswer(bridge.latestAnswer)
-                            } label: {
-                                Image(systemName: "square.and.arrow.down")
-                            }
-                            .accessibilityLabel("지금 가져오기")
-                            .accessibilityHint("지금 보이는 답변을 바로 게시물로 가져옵니다")
+                }
+                ToolbarItemGroup(placement: .confirmationAction) {
+                    if !bridge.latestAnswer.isEmpty, !hasImported {
+                        Button {
+                            importAnswer(bridge.latestAnswer)
+                        } label: {
+                            Image(systemName: "square.and.arrow.down")
                         }
-                        Menu {
-                            Button {
-                                Task {
-                                    if await fillPrompt(force: true) {
-                                        await submitPromptWhenReady()
-                                    }
+                        .accessibilityLabel("지금 가져오기")
+                        .accessibilityHint("지금 보이는 답변을 바로 게시물로 가져옵니다")
+                    }
+                    Menu {
+                        Button {
+                            Task {
+                                if await fillPrompt(force: true) {
+                                    await submitPromptWhenReady()
                                 }
-                            } label: {
-                                Label("다시 넣기", systemImage: "text.cursor")
-                            }
-                            .disabled(!bridge.isPageReady)
-
-                            Button {
-                                UIPasteboard.general.string = prompt
-                                onManualCopyFallback()
-                            } label: {
-                                Label("문구 복사", systemImage: "doc.on.doc")
                             }
                         } label: {
-                            Image(systemName: "ellipsis.circle")
+                            Label("다시 넣기", systemImage: "text.cursor")
                         }
-                        .accessibilityLabel("추가 옵션")
+                        .disabled(!bridge.isPageReady)
+
+                        Button {
+                            UIPasteboard.general.string = prompt
+                            onManualCopyFallback()
+                        } label: {
+                            Label("문구 복사", systemImage: "doc.on.doc")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
                     }
+                    .accessibilityLabel("추가 옵션")
                 }
-                .navigationBarTitleDisplayMode(.inline)
-                .task(id: bridge.navigationGeneration) {
-                    await autoFillWhenReady()
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .task(id: bridge.navigationGeneration) {
+                await autoFillWhenReady()
+            }
+            .onChange(of: bridge.isAnswerStable) { _, stable in
+                guard stable, !bridge.latestAnswer.isEmpty, !hasImported else { return }
+                importAnswer(bridge.latestAnswer)
+            }
+            .onChange(of: bridge.isGenerating) { _, isGenerating in
+                guard isGenerating, submittedAt == nil else { return }
+                markSubmitted()
+            }
+            .onChange(of: bridge.detectedError) { _, error in
+                guard let error, !error.isEmpty else { return }
+                let sanitized = ExternalAIBrowserBridge.sanitizeErrorMessage(error, provider: provider)
+                detectedErrorMessage = sanitized
+                onError?(sanitized)
+            }
+            .task(id: submittedAt) {
+                guard let submittedAt else {
+                    elapsedSeconds = 0
+                    return
                 }
-                .onChange(of: bridge.isAnswerStable) { _, stable in
-                    guard stable, !bridge.latestAnswer.isEmpty, !hasImported else { return }
-                    importAnswer(bridge.latestAnswer)
+                while !Task.isCancelled, !hasImported, detectedErrorMessage == nil {
+                    elapsedSeconds = max(0, Int(Date().timeIntervalSince(submittedAt)))
+                    try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
+            }
+        }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        Label(message, systemImage: "exclamationmark.triangle.fill")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.red)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(Color(uiColor: .secondarySystemBackground))
+    }
+
+    private func fallbackBanner(_ reason: ExternalAIFallbackReason) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: reason.iconName)
+                .font(.headline)
+                .foregroundStyle(BrandTheme.accent)
+                .padding(.top, 1)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(reason.userMessage)
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.primary)
+                Text(reason.detailMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(Color(uiColor: .secondarySystemBackground))
+        .overlay(alignment: .bottom) {
+            Divider()
         }
     }
 
@@ -112,7 +356,7 @@ struct ExternalAIBrowserSheet: View {
         onImport(cleanedText)
     }
 
-    private static func cleanedImportedAnswer(_ text: String, provider: ExternalAIProvider) -> String {
+    static func cleanedImportedAnswer(_ text: String, provider: ExternalAIProvider) -> String {
         var normalizedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if provider == .grok {
             normalizedText = removingGrokWorkDurationPrefix(from: normalizedText)
@@ -208,6 +452,7 @@ struct ExternalAIBrowserSheet: View {
         while !Task.isCancelled, Date() < deadline, !hasSubmittedPrompt {
             if await bridge.submitPrompt() {
                 hasSubmittedPrompt = true
+                markSubmitted()
                 return true
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -231,11 +476,12 @@ struct ExternalAIBrowserSheet: View {
     }
 
     private var statusText: String {
+        if let detectedErrorMessage { return detectedErrorMessage }
         if hasImported {
             return "답변을 가져왔어요"
         }
-        if bridge.isGenerating {
-            return "\(provider.title)가 답변을 쓰는 중…"
+        if bridge.isGenerating || hasSubmittedPrompt {
+            return "답변을 기다리는 중 (\(Self.formatElapsedSeconds(elapsedSeconds)))"
         }
         if !bridge.latestAnswer.isEmpty {
             return "답변이 끝나가는 중이에요…"
@@ -258,15 +504,32 @@ struct ExternalAIBrowserSheet: View {
     }
 
     private var statusIcon: String {
+        if detectedErrorMessage != nil { return "exclamationmark.triangle.fill" }
         if hasImported { return "checkmark.circle.fill" }
         if fillFailed { return "exclamationmark.triangle.fill" }
         return "info.circle"
     }
 
     private var statusColor: Color {
+        if detectedErrorMessage != nil { return .red }
         if hasImported { return .green }
         if fillFailed { return .orange }
         return .secondary
+    }
+
+    private func markSubmitted() {
+        guard submittedAt == nil else { return }
+        let date = Date()
+        submittedAt = date
+        elapsedSeconds = 0
+        onSubmitted?(date)
+    }
+
+    private static func formatElapsedSeconds(_ seconds: Int) -> String {
+        if seconds < 60 {
+            return String(format: "%02d초", seconds)
+        }
+        return String(format: "%d분 %02d초", seconds / 60, seconds % 60)
     }
 }
 
@@ -309,7 +572,7 @@ private struct ExternalAILoginWebView: UIViewRepresentable {
     func updateUIView(_ uiView: WKWebView, context: Context) {}
 }
 
-/// WKWebView 안 상태(페이지 준비, 생성 중, 답변 안정 여부)를 SwiftUI로 전달하는 저장소.
+/// WKWebView 안 상태(페이지 준비, 생성 중, 답변 안정 여부, 오류 감지)를 SwiftUI로 전달하는 저장소.
 @MainActor
 final class ExternalAIBrowserBridge: ObservableObject {
     @Published fileprivate(set) var isPageReady = false
@@ -319,8 +582,19 @@ final class ExternalAIBrowserBridge: ObservableObject {
     /// 메인 프레임 내비게이션이 끝날 때마다 증가한다. SwiftUI가 이 값을 `.task(id:)`로 관찰해
     /// 로그인 리디렉션 이후에도 자동 채우기 시도를 다시 시작할 수 있게 한다.
     @Published fileprivate(set) var navigationGeneration = 0
+    @Published fileprivate(set) var interactionReason: ExternalAIFallbackReason?
+    @Published fileprivate(set) var detectedError: String?
 
     fileprivate weak var webView: WKWebView?
+
+    func checkURLForInteraction(_ urlString: String) {
+        let lower = urlString.lowercased()
+        if lower.contains("accounts.google.com") || lower.contains("auth.openai.com") || lower.contains("claude.ai/login") || lower.contains("/login") || lower.contains("/signin") || lower.contains("auth0") {
+            interactionReason = .login
+        } else if lower.contains("challenge") || lower.contains("checkpoint") || lower.contains("cloudflare") || lower.contains("turnstile") || lower.contains("recaptcha") {
+            interactionReason = .captcha
+        }
+    }
 
     /// 입력창에 프롬프트를 채운다. 자동으로 보내지는 않는다.
     /// `force`가 false면 사용자가 이미 다른 내용을 입력해 둔 경우 덮어쓰지 않는다.
@@ -370,6 +644,7 @@ final class ExternalAIBrowserBridge: ObservableObject {
         isGenerating = false
         isAnswerStable = false
         latestAnswer = ""
+        detectedError = nil
     }
 
     fileprivate func markNavigationFinished() {
@@ -377,10 +652,55 @@ final class ExternalAIBrowserBridge: ObservableObject {
         navigationGeneration += 1
     }
 
-    fileprivate func receive(text: String, stable: Bool, generating: Bool) {
+    fileprivate func receive(text: String, stable: Bool, generating: Bool, interaction: String = "none", error: String = "") {
         isGenerating = generating
         if !text.isEmpty { latestAnswer = text }
         isAnswerStable = stable && !text.isEmpty
+        if !error.isEmpty && detectedError == nil {
+            detectedError = error
+        }
+        if interactionReason == nil {
+            if interaction == "login" {
+                interactionReason = .login
+            } else if interaction == "captcha" {
+                interactionReason = .captcha
+            }
+        }
+    }
+
+    static func sanitizeErrorMessage(_ raw: String, provider: ExternalAIProvider) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        text = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+        let filteredLines = text.components(separatedBy: .newlines).filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return false }
+            let lower = trimmed.lowercased()
+            if lower.hasPrefix("at ") || lower.contains("traceback") || lower.contains("stack trace") || lower.contains("eval(") || lower.contains("function()") {
+                return false
+            }
+            return true
+        }
+        text = filteredLines.joined(separator: " ")
+        let secretPatterns = [
+            #"(?i)(?:bearer|token|key|secret|password|auth)[\s:=]+[A-Za-z0-9_\-\.]{8,}"#,
+            #"https?://\S+"#
+        ]
+        for pattern in secretPatterns {
+            text = text.replacingOccurrences(of: pattern, with: "", options: .regularExpression)
+        }
+        text = text.components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if text.count > 80 {
+            text = String(text.prefix(79)) + "…"
+        }
+
+        if text.isEmpty {
+            return "\(provider.title) 서비스에서 오류가 발생했어요."
+        }
+        return "\(provider.title) 오류: \(text)"
     }
 }
 
@@ -417,6 +737,8 @@ private struct ExternalAIWebView: UIViewRepresentable {
 
     static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
         uiView.configuration.userContentController.removeScriptMessageHandler(forName: "starManagerBridge")
+        uiView.stopLoading()
+        uiView.navigationDelegate = nil
     }
 
     @MainActor
@@ -429,9 +751,38 @@ private struct ExternalAIWebView: UIViewRepresentable {
 
         func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
             bridge.resetForNewNavigation()
+            if let url = webView.url?.absoluteString {
+                bridge.checkURLForInteraction(url)
+            }
         }
 
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            if let url = webView.url?.absoluteString {
+                bridge.checkURLForInteraction(url)
+            }
+            bridge.markNavigationFinished()
+        }
+
+        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            if let url = navigationAction.request.url?.absoluteString {
+                bridge.checkURLForInteraction(url)
+            }
+            decisionHandler(.allow)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            let nsError = error as NSError
+            if nsError.domain != NSURLErrorDomain || nsError.code != NSURLErrorCancelled {
+                bridge.detectedError = error.localizedDescription
+            }
+            bridge.markNavigationFinished()
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            let nsError = error as NSError
+            if nsError.domain != NSURLErrorDomain || nsError.code != NSURLErrorCancelled {
+                bridge.detectedError = error.localizedDescription
+            }
             bridge.markNavigationFinished()
         }
 
@@ -440,7 +791,9 @@ private struct ExternalAIWebView: UIViewRepresentable {
             let text = (body["text"] as? String) ?? ""
             let stable = (body["stable"] as? Bool) ?? false
             let generating = (body["generating"] as? Bool) ?? false
-            bridge.receive(text: text, stable: stable, generating: generating)
+            let interaction = (body["interaction"] as? String) ?? "none"
+            let error = (body["error"] as? String) ?? ""
+            bridge.receive(text: text, stable: stable, generating: generating, interaction: interaction, error: error)
         }
     }
 }
@@ -608,6 +961,49 @@ private enum ExternalAIBrowserScripts {
             return current.length === 0 || answerStarted || generating;
           };
 
+          function detectInteraction() {
+            try {
+              const url = (window.location.href || '').toLowerCase();
+              if (url.includes('accounts.google.com') || url.includes('auth.openai.com') || url.includes('claude.ai/login') || url.includes('/login') || url.includes('/signin') || url.includes('/signup') || url.includes('auth0')) {
+                return 'login';
+              }
+              if (url.includes('challenge') || url.includes('checkpoint') || url.includes('cloudflare') || document.querySelector('#challenge-form, .cf-turnstile, iframe[src*="turnstile"], iframe[src*="recaptcha"]')) {
+                return 'captcha';
+              }
+            } catch (e) {}
+            return 'none';
+          }
+
+          function detectError() {
+            try {
+              const errorEls = queryAll([
+                "[role='alert']",
+                "[data-testid*='error']",
+                "[data-testid*='toast-error']",
+                "div[class*='error-message']",
+                "div[class*='errorMessage']",
+                "div[class*='alert-danger']",
+                ".snack-bar",
+                "simple-snack-bar",
+                "div.model-response-error"
+              ]);
+              for (const el of errorEls) {
+                if (!isVisible(el)) continue;
+                const t = (el.innerText || el.textContent || '').trim();
+                if (!t || t.length < 2) continue;
+                const lower = t.toLowerCase();
+                if (lower.includes('error') || lower.includes('failed') || lower.includes('unavailable') ||
+                    lower.includes('rate limit') || lower.includes('too many') || lower.includes('limit reached') ||
+                    lower.includes('try again') || lower.includes('오류') || lower.includes('실패') ||
+                    lower.includes('한도') || lower.includes('잠시 후') || lower.includes('문제') ||
+                    el.getAttribute('role') === 'alert') {
+                  return t.slice(0, 150);
+                }
+              }
+            } catch (e) {}
+            return '';
+          }
+
           // 감시 시작 시점의 답변 개수를 기준으로 삼아, 이전 대화 답변이나 사용자가 입력한 프롬프트를
           // 새 답변으로 잘못 가져오지 않도록 한다.
           const baselineCount = queryAll(assistantSelectors).length;
@@ -619,8 +1015,28 @@ private enum ExternalAIBrowserScripts {
             // Gemini는 답변 완료 뒤에도 숨겨진 mat-progress-spinner를 DOM에 남겨 둔다.
             // 실제로 보이는 생성 표시만 검사해야 완료된 응답을 정상적으로 가져올 수 있다.
             const generating = isGeneratingNow();
+            const interaction = detectInteraction();
+            const errorText = detectError();
+
+            if (errorText) {
+              window.webkit.messageHandlers.starManagerBridge.postMessage({
+                text: '',
+                stable: false,
+                generating: false,
+                interaction: 'none',
+                error: errorText
+              });
+              return;
+            }
+
             if (items.length <= baselineCount) {
-              window.webkit.messageHandlers.starManagerBridge.postMessage({ text: '', stable: false, generating: generating });
+              window.webkit.messageHandlers.starManagerBridge.postMessage({
+                text: '',
+                stable: false,
+                generating: generating,
+                interaction: interaction,
+                error: ''
+              });
               return;
             }
             const latest = items[items.length - 1];
@@ -632,10 +1048,16 @@ private enum ExternalAIBrowserScripts {
             }
             lastText = text;
             // 스트리밍 중 잠깐 멈춘 순간을 완성으로 착각하지 않도록, 변화 없는 상태가
-            // 약 3초 이상(0.9초 주기 x 4회) 이어져야 안정된 답변으로 판단한다.
-            const stable = stableTicks >= 4 && text.length > 0;
-            window.webkit.messageHandlers.starManagerBridge.postMessage({ text: text, stable: stable, generating: generating });
-          }, 900);
+            // 약 1.4초(0.7초 주기 x 2회) 이어지고 생성이 끝났을 때 안정된 답변으로 판단한다.
+            const stable = stableTicks >= 2 && text.length > 0 && !generating;
+            window.webkit.messageHandlers.starManagerBridge.postMessage({
+              text: text,
+              stable: stable,
+              generating: generating,
+              interaction: interaction,
+              error: ''
+            });
+          }, 700);
         })();
         """
     }
