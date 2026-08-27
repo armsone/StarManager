@@ -85,12 +85,7 @@ struct DeviceIntelligenceCaptionGenerator: CaptionGenerating {
             사용자의 모든 형식 조건과 금지 표현을 반드시 지킵니다.
             """
             let session = LanguageModelSession(instructions: instructions)
-            let basePrompt = """
-            \(profile.prompt(for: idea))
-            - 선택한 분위기: \(mood.rawValue)
-            - 이야기 비중: \(length.storyWeightTitle) — \(length.promptInstruction)
-            - 공백과 줄바꿈을 포함해 정확히 \(profile.controls.characterCount)자로 작성
-            """
+            let basePrompt = profile.generationPrompt(for: idea, mood: mood, length: length)
 
             var response = try await session.respond(to: basePrompt).content
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -321,11 +316,7 @@ struct BackendCaptionGenerator: CaptionGenerating {
         request.httpBody = try JSONEncoder().encode(BackendCaptionRequest(
             provider: provider.rawValue,
             idea: idea,
-            prompt: """
-            \(profile.prompt(for: idea))
-            - 선택한 분위기: \(mood.rawValue)
-            - 이야기 비중: \(length.storyWeightTitle) — \(length.promptInstruction)
-            """,
+            prompt: profile.generationPrompt(for: idea, mood: mood, length: length),
             mood: mood.rawValue,
             length: length.rawValue,
             targetCharacterCount: profile.controls.characterCount
@@ -557,12 +548,7 @@ struct DirectAICaptionGenerator: CaptionGenerating {
     ) async throws -> GeneratedPost {
         guard !normalizedAPIKey.isEmpty else { throw DirectAIError.missingKey(provider) }
 
-        let basePrompt = """
-        \(profile.prompt(for: idea))
-        - 선택한 분위기: \(mood.rawValue)
-        - 이야기 비중: \(length.storyWeightTitle) — \(length.promptInstruction)
-        - 공백과 줄바꿈을 포함해 정확히 \(profile.controls.characterCount)자로 작성
-        """
+        let basePrompt = profile.generationPrompt(for: idea, mood: mood, length: length)
 
         var text = try await requestText(prompt: basePrompt)
         let validationContext = CaptionValidationContext(

@@ -9,9 +9,8 @@ struct ProfileSettingsView: View {
     @AppStorage(SharedGenerationSettings.moodKey) private var mood = PostMood.witty
     @AppStorage(SharedGenerationSettings.storyWeightKey) private var length = PostLength.medium
     @AppStorage(SharedGenerationSettings.stylePresetKey) private var selectedGenerationStyleRaw = GenerationStylePreset.generation386.rawValue
-    @State private var showsRestoreConfirmation = false
     @State private var presetName = ""
-    @State private var showsAdvancedPrompt = false
+    @State private var loginProvider: ExternalAIProvider?
 
     var body: some View {
         Form {
@@ -38,8 +37,6 @@ struct ProfileSettingsView: View {
             }
 
             Section {
-                labeledField("주제", text: $profileStore.profile.accountTopic)
-                labeledField("독자", text: $profileStore.profile.audience)
                 labeledField("말투", text: $profileStore.profile.voice)
                 Toggle("이모지 사용", isOn: $profileStore.profile.usesEmoji)
             } header: {
@@ -76,7 +73,7 @@ struct ProfileSettingsView: View {
                             }
                         }
                         .buttonStyle(.plain)
-                        .accessibilityHint("선택하면 글자 수를 제외한 말투와 분위기 설정이 적용됩니다")
+                        .accessibilityHint("선택하면 말투와 한 줄 추가 요청이 적용됩니다")
                         .accessibilityValue(selectedGenerationStyle == preset ? "선택됨" : "선택 안 됨")
                     }
                 }
@@ -97,36 +94,22 @@ struct ProfileSettingsView: View {
                 .accessibilityLabel("이야기 비중")
 
                 controlSlider("글자 수", value: controlBinding(\.characterCount), range: 50...500, step: 10, suffix: "자")
-                controlSlider("감동", value: controlBinding(\.emotion))
-                controlSlider("친절함", value: controlBinding(\.kindness))
-                controlSlider("참신함", value: controlBinding(\.originality))
-                controlSlider("단단함", value: controlBinding(\.masculinity))
-                controlSlider("시크함", value: controlBinding(\.chic))
-
-                HStack {
-                    Text("느낌 합계")
-                    Spacer()
-                    Text("\(profileStore.profile.controls.toneTotal)%")
-                        .foregroundStyle(profileStore.profile.controls.toneTotal == 100 ? Color.secondary : Color.orange)
-                        .monospacedDigit()
-                }
-                .font(.footnote)
             } header: {
                 BrandSectionTitle(title: "글쓰기 취향", systemImage: "paintpalette.fill", tone: .leather)
             } footer: {
-                Text("여기서 고른 모든 값이 스튜디오의 게시물 생성에 바로 적용됩니다.")
+                Text("프리셋·분위기·이야기 비중·글자 수만 간단히 요청에 반영됩니다.")
             }
 
             Section {
                 TextField(
-                    "추가 지침",
+                    "한 줄 추가 요청",
                     text: Binding(
                         get: { profileStore.profile.additionalInstructions ?? "" },
                         set: { profileStore.profile.additionalInstructions = $0 }
                     ),
                     axis: .vertical
                 )
-                .lineLimit(3...8)
+                .lineLimit(1...3)
                 TextField("금지 표현", text: $profileStore.profile.prohibitedPhrases, axis: .vertical)
                 TextField("해시태그", text: $profileStore.profile.hashtagStyle)
             } header: {
@@ -147,17 +130,24 @@ struct ProfileSettingsView: View {
             }
 
             Section {
-                DisclosureGroup("직접 편집", isExpanded: $showsAdvancedPrompt) {
-                    TextEditor(text: $profileStore.profile.writingGuidelines)
-                        .font(.callout)
-                        .frame(minHeight: 360)
-
-                    Button("기본값으로 되돌리기", role: .destructive) {
-                        showsRestoreConfirmation = true
+                ForEach(ExternalAIProvider.allCases) { provider in
+                    Button {
+                        loginProvider = provider
+                    } label: {
+                        HStack {
+                            Text(provider.title).foregroundStyle(.primary)
+                            Spacer()
+                            Label("로그인 열기", systemImage: "arrow.up.right.square")
+                                .labelStyle(.titleAndIcon)
+                                .font(.footnote)
+                        }
                     }
+                    .accessibilityHint("\(provider.title) 공식 로그인 페이지를 앱 안에서 엽니다")
                 }
             } header: {
-                BrandSectionTitle(title: "작성 원칙", systemImage: "text.book.closed.fill")
+                BrandSectionTitle(title: "외부 AI 로그인 관리", systemImage: "person.badge.key.fill")
+            } footer: {
+                Text("처음 열면 각 서비스의 공식 로그인 페이지가 떠요. 한 번 로그인하면 이 기기에서는 서비스가 로그아웃시키기 전까지 기억돼요. 스타매니저는 비밀번호를 보거나 저장하지 않아요.")
             }
 
             Section {
@@ -182,17 +172,8 @@ struct ProfileSettingsView: View {
         .onChange(of: appearanceStyleRaw) { _, newValue in
             updateAppIcon(for: newValue)
         }
-        .confirmationDialog(
-            "기본 작성 지침으로 되돌릴까요?",
-            isPresented: $showsRestoreConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("되돌리기", role: .destructive) {
-                profileStore.restoreDefaultWritingGuidelines()
-            }
-            Button("취소", role: .cancel) {}
-        } message: {
-            Text("직접 수정한 내용은 사라집니다.")
+        .sheet(item: $loginProvider) { provider in
+            ExternalAILoginSheet(provider: provider)
         }
     }
 

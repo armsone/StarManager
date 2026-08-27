@@ -64,6 +64,32 @@ struct CreatorProfile: Codable, Equatable, Sendable {
         \(idea)
         """
     }
+
+    /// 모든 AI에 동일하게 전달하는 짧고 명확한 단일 요청문.
+    func generationPrompt(for idea: String, mood: PostMood, length: PostLength) -> String {
+        let extra = (additionalInstructions ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var request = """
+        [내가 입력한 내용]
+        \(idea.trimmingCharacters(in: .whitespacesAndNewlines))
+
+        [원하는 결과]
+        위 내용으로 한국어 인스타그램 산문을 쓰고 완성 문구만 출력해.
+        - 공백과 줄바꿈을 포함해 정확히 \(controls.characterCount)자
+        - 첫 줄: 한글 해시태그 2개 연속
+        - 본문: \(mood.rawValue), \(voice), \(length.promptInstruction)
+        - 문장마다 줄바꿈하고 상투어 없이 자연스럽게 작성
+        - 이모지: \(usesEmoji ? "첫 줄을 제외한 문단 앞쪽에만 절제해 사용" : "마지막 요약 줄 외에는 사용하지 않음")
+        - 마지막 줄: 전체 내용을 요약하고 앞뒤를 이모지로 감싸기
+        - 금지 표현: \(prohibitedPhrases.isEmpty ? "없음" : prohibitedPhrases)
+        - 해시태그 방향: \(hashtagStyle)
+        """
+
+        if !extra.isEmpty {
+            request += "\n\n[추가 요청]\n" + extra
+        }
+        return request
+    }
 }
 
 struct GenerationControls: Codable, Equatable, Sendable {

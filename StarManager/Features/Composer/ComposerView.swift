@@ -45,15 +45,13 @@ struct ComposerView: View {
     @State private var showsImagePlayground = false
     @State private var imagePlaygroundPrompt = ""
     @State private var imageGenerationPostID: UUID?
-    @State private var pendingExternalProvider: DirectAIProvider?
+    @State private var pendingExternalProvider: ExternalAIProvider?
     @State private var draggedMediaID: UUID?
     @State private var isMediaDropTargeted = false
-    @State private var aiPromptShare: AIPromptShare?
     @State private var showsCamera = false
-    @State private var externalProviderToOpen: DirectAIProvider?
+    @State private var browsingProvider: ExternalAIProvider?
     @State private var showsResetConfirmation = false
     @State private var resetScrollRequest = UUID()
-    @State private var selectedAIChoice = AIChoice.external(.openAI)
     @AppStorage("hasShownPastePermissionGuidance") private var hasShownPastePermissionGuidance = false
 
     var body: some View {
@@ -133,20 +131,19 @@ struct ComposerView: View {
                 }
             }
         }
-        .sheet(item: $aiPromptShare) { payload in
-            ActivityView(items: [payload.text], cleanupURLs: []) { completed, error in
-                if let error {
-                    errorMessage = "\(payload.provider.title)로 보내지 못했어요: \(error.localizedDescription)"
-                } else if completed {
-                    statusMessage = "\(payload.provider.title)로 보냄 · 결과를 복사해 돌아오세요"
+        .fullScreenCover(item: $browsingProvider) { provider in
+            ExternalAIBrowserSheet(
+                provider: provider,
+                prompt: externalPrompt,
+                onImport: { text in importAIResult(text, from: provider) },
+                onManualCopyFallback: {
+                    statusMessage = "문구 복사됨 · 직접 붙여넣고, 답변은 복사해서 붙여넣기로 가져오세요"
                     if !hasShownPastePermissionGuidance {
                         hasShownPastePermissionGuidance = true
-                        statusMessage = "\(payload.provider.title)로 보냄 · 결과를 복사해 돌아오세요. 붙여넣기가 막히면 설정 > 앱 > StarManager > 다른 앱에서 붙여넣기 > 허용"
+                        statusMessage = "문구 복사됨 · 붙여넣기가 막히면 설정 > 앱 > StarManager > 다른 앱에서 붙여넣기 > 허용"
                     }
-                } else {
-                    statusMessage = "보내기 취소 · 요청문은 복사됨"
                 }
-            }
+            )
         }
         .fullScreenCover(isPresented: $showsCamera) {
             CameraCaptureView(
@@ -158,16 +155,6 @@ struct ComposerView: View {
                 }
             )
             .ignoresSafeArea()
-        }
-        .alert(item: $externalProviderToOpen) { provider in
-            Alert(
-                title: Text("\(provider.title) 앱에서 만들까요?"),
-                message: Text("공유 화면에서 \(provider.title) 앱을 선택하세요. 결과를 복사해 돌아오면 스타메니저에서 가져올 수 있습니다."),
-                primaryButton: .default(Text("공유 화면 열기")) {
-                    sharePrompt(with: provider)
-                },
-                secondaryButton: .cancel(Text("취소"))
-            )
         }
         .confirmationDialog(
             "새 이야기로 시작할까요?",
@@ -296,53 +283,37 @@ struct ComposerView: View {
 
     private var aiChoiceButtons: some View {
         VStack(alignment: .leading, spacing: 10) {
-            LazyVGrid(columns: aiChoiceColumns, spacing: 8) {
+            HStack(spacing: 6) {
                 ForEach(AIChoice.allCases) { choice in
                     Button {
-                        selectedAIChoice = choice
+                        runAI(choice)
                     } label: {
-                        VStack(spacing: 7) {
+                        VStack(spacing: 3) {
                             choice.icon
-                                .frame(width: 28, height: 28)
+                                .frame(width: 32, height: 32)
                             Text(choice.title)
-                                .font(.caption.weight(.semibold))
+                                .font(.system(size: 9, weight: .semibold))
                                 .lineLimit(1)
-                                .minimumScaleFactor(0.8)
+                                .minimumScaleFactor(0.4)
                         }
                         .foregroundStyle(theme.ink)
-                        .frame(maxWidth: .infinity, minHeight: 72)
+                        .frame(maxWidth: .infinity, minHeight: 62)
                         .background(
-                            selectedAIChoice == choice ? theme.selectionFill : theme.surface,
+                            theme.surface,
                             in: RoundedRectangle(cornerRadius: 13, style: .continuous)
                         )
                         .overlay {
                             RoundedRectangle(cornerRadius: 13, style: .continuous)
-                                .stroke(selectedAIChoice == choice ? BrandTheme.accent : theme.border, lineWidth: selectedAIChoice == choice ? 1.5 : 1)
+                                .stroke(theme.border, lineWidth: 1)
                         }
                     }
                     .buttonStyle(.plain)
+                    .disabled(trimmedIdea.isEmpty || isGenerating)
+                    .opacity(trimmedIdea.isEmpty || isGenerating ? 0.46 : 1)
                     .accessibilityLabel(choice.title)
-                    .accessibilityValue(selectedAIChoice == choice ? "선택됨" : "선택 안 됨")
-                    .accessibilityHint("게시물을 만들 AI를 선택합니다")
+                    .accessibilityHint(choice.accessibilityHint)
                 }
             }
-
-            Button {
-                runAI(selectedAIChoice)
-            } label: {
-                HStack(spacing: 9) {
-                    if isGenerating {
-                        ProgressView().tint(.white)
-                    } else {
-                        Image(systemName: "sparkles")
-                    }
-                    Text(isGenerating ? "게시물을 만드는 중…" : selectedAIChoice.actionTitle)
-                }
-            }
-            .buttonStyle(GlossyPrimaryButtonStyle())
-            .disabled(trimmedIdea.isEmpty || isGenerating)
-            .opacity(trimmedIdea.isEmpty ? 0.46 : 1)
-            .accessibilityHint(selectedAIChoice.accessibilityHint)
 
             if let provider = pendingExternalProvider {
                 PasteButton(payloadType: String.self) { values in
@@ -364,16 +335,21 @@ struct ComposerView: View {
         switch choice {
         case .appleIntelligence:
             Task { await generateDraft() }
-        case .external(.gemini):
-            sharePrompt(with: .gemini)
         case let .external(provider):
-            externalProviderToOpen = provider
+            openExternalBrowser(for: provider)
         }
     }
 
-    private var aiChoiceColumns: [GridItem] {
-        let count = dynamicTypeSize.isAccessibilitySize ? 2 : 4
-        return Array(repeating: GridItem(.flexible(), spacing: 7), count: count)
+    @MainActor
+    private func openExternalBrowser(for provider: ExternalAIProvider) {
+        guard !trimmedIdea.isEmpty else {
+            errorMessage = "이야기를 입력해 주세요."
+            return
+        }
+        errorMessage = nil
+        statusMessage = nil
+        pendingExternalProvider = provider
+        browsingProvider = provider
     }
 
     private var mediaOrderEditor: some View {
@@ -615,31 +591,12 @@ struct ComposerView: View {
         activeValidationReport?.passesAllRules == true
     }
 
-    @MainActor
-    private func sharePrompt(with provider: DirectAIProvider) {
-        guard !trimmedIdea.isEmpty else {
-            errorMessage = "이야기를 입력해 주세요."
-            return
-        }
-        errorMessage = nil
-        UIPasteboard.general.string = externalPrompt
-        pendingExternalProvider = provider
-        statusMessage = "공유 화면에서 \(provider.title) 선택"
-        shareMessage = nil
-        aiPromptShare = AIPromptShare(provider: provider, text: externalPrompt)
-    }
-
     private var externalPrompt: String {
-        """
-        \(profileStore.profile.prompt(for: trimmedIdea))
-        - 선택한 분위기: \(mood.rawValue)
-        - 이야기 비중: \(length.storyWeightTitle) — \(length.promptInstruction)
-        - 공백과 줄바꿈을 포함해 정확히 \(profileStore.profile.controls.characterCount)자로 작성
-        """
+        profileStore.profile.generationPrompt(for: trimmedIdea, mood: mood, length: length)
     }
 
     @MainActor
-    private func importAIResult(_ text: String, from provider: DirectAIProvider) {
+    private func importAIResult(_ text: String, from provider: ExternalAIProvider) {
         guard !text.isEmpty else {
             errorMessage = "복사한 결과가 비어 있어요."
             return
@@ -703,8 +660,7 @@ struct ComposerView: View {
         shareMessage = nil
         shareMessageIsError = false
         pendingExternalProvider = nil
-        externalProviderToOpen = nil
-        aiPromptShare = nil
+        browsingProvider = nil
         sharePayload = nil
         showsCamera = false
         showsImagePlayground = false
@@ -1174,19 +1130,21 @@ private struct DraftSignature: Equatable {
     let profile: CreatorProfile
 }
 
-private extension DirectAIProvider {
+private extension ExternalAIProvider {
     var symbolName: String {
         switch self {
         case .openAI: "bubble.left.and.text.bubble.right"
         case .gemini: "diamond"
         case .grok: "xmark"
+        case .claude: "sparkles"
         }
     }
-    var assetName: String {
+    var assetName: String? {
         switch self {
         case .openAI: "ChatGPTBrand"
         case .gemini: "GeminiBrand"
         case .grok: "GrokBrand"
+        case .claude: nil
         }
     }
     var backgroundColor: Color {
@@ -1194,11 +1152,12 @@ private extension DirectAIProvider {
         case .openAI: .white
         case .gemini: Color(red: 0.92, green: 0.95, blue: 1.00)
         case .grok: .black
+        case .claude: Color(red: 0.96, green: 0.91, blue: 0.84)
         }
     }
     var foregroundColor: Color {
         switch self {
-        case .openAI, .gemini: Color(red: 0.10, green: 0.10, blue: 0.11)
+        case .openAI, .gemini, .claude: Color(red: 0.10, green: 0.10, blue: 0.11)
         case .grok: .white
         }
     }
@@ -1207,6 +1166,7 @@ private extension DirectAIProvider {
         case .openAI: .black.opacity(0.14)
         case .gemini: Color(red: 0.25, green: 0.52, blue: 0.96).opacity(0.32)
         case .grok: .black
+        case .claude: Color(red: 0.78, green: 0.38, blue: 0.22).opacity(0.35)
         }
     }
     var captionSource: CaptionSource {
@@ -1214,18 +1174,19 @@ private extension DirectAIProvider {
         case .openAI: .chatGPT
         case .gemini: .gemini
         case .grok: .grok
+        case .claude: .claude
         }
     }
 }
 
 private enum AIChoice: Identifiable, CaseIterable, Equatable {
     case appleIntelligence
-    case external(DirectAIProvider)
+    case external(ExternalAIProvider)
 
     static let allCases: [AIChoice] = [
-        .external(.openAI),
         .external(.gemini),
-        .external(.grok),
+        .external(.openAI),
+        .external(.claude),
         .appleIntelligence
     ]
 
@@ -1238,7 +1199,7 @@ private enum AIChoice: Identifiable, CaseIterable, Equatable {
 
     var title: String {
         switch self {
-        case .appleIntelligence: "AI"
+        case .appleIntelligence: "Apple Intelligence"
         case let .external(provider): provider.title
         }
     }
@@ -1253,7 +1214,7 @@ private enum AIChoice: Identifiable, CaseIterable, Equatable {
     var accessibilityHint: String {
         switch self {
         case .appleIntelligence: "이 기기 안에서 게시물을 만듭니다"
-        case let .external(provider): "공유 화면을 열어 \(provider.title) 앱에서 게시물을 만듭니다"
+        case let .external(provider): "앱 안에서 \(provider.title)을 열어 게시물을 만듭니다"
         }
     }
 
@@ -1262,12 +1223,17 @@ private enum AIChoice: Identifiable, CaseIterable, Equatable {
         switch self {
         case .appleIntelligence:
             Image(systemName: "apple.logo")
-                .font(.system(size: 24, weight: .semibold))
+                .font(.system(size: 29, weight: .semibold))
         case let .external(provider):
-            Image(provider.assetName)
-                .resizable()
-                .scaledToFit()
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            if let assetName = provider.assetName {
+                Image(assetName)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+            } else {
+                Image(systemName: provider.symbolName)
+                    .font(.system(size: 28, weight: .semibold))
+            }
         }
     }
 
@@ -1299,6 +1265,7 @@ private enum CaptionSource: String, CaseIterable, Identifiable, Hashable {
     case chatGPT
     case gemini
     case grok
+    case claude
 
     var id: String { rawValue }
     var title: String {
@@ -1308,6 +1275,7 @@ private enum CaptionSource: String, CaseIterable, Identifiable, Hashable {
         case .chatGPT: "ChatGPT"
         case .gemini: "Gemini"
         case .grok: "Grok"
+        case .claude: "Claude"
         }
     }
     var symbolName: String {
@@ -1317,6 +1285,7 @@ private enum CaptionSource: String, CaseIterable, Identifiable, Hashable {
         case .chatGPT: "bubble.left.and.text.bubble.right"
         case .gemini: "diamond"
         case .grok: "xmark"
+        case .claude: "sparkles"
         }
     }
 }
@@ -1548,12 +1517,6 @@ private struct SharePayload: Identifiable {
     let id = UUID()
     let items: [Any]
     let cleanupURLs: [URL]
-}
-
-private struct AIPromptShare: Identifiable {
-    let id = UUID()
-    let provider: DirectAIProvider
-    let text: String
 }
 
 private struct CameraCaptureView: UIViewControllerRepresentable {
