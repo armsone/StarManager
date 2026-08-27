@@ -82,7 +82,11 @@ struct ComposerView: View {
                 .padding(.vertical, horizontalSizeClass == .regular ? 20 : 12)
                 .frame(maxWidth: .infinity)
             }
-            .scrollDismissesKeyboard(.interactively)
+            .scrollDismissesKeyboard(.immediately)
+            .onScrollPhaseChange { _, newPhase in
+                guard newPhase == .interacting else { return }
+                isIdeaFocused = false
+            }
             .onAppear {
                 guard !hasPositionedInitialScroll else { return }
                 hasPositionedInitialScroll = true
