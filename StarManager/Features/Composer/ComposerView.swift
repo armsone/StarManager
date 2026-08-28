@@ -103,6 +103,10 @@ struct ComposerView: View {
                 while !Task.isCancelled && isGenerating {
                     let elapsed = max(0, Int(Date().timeIntervalSince(submittedAt)))
                     elapsedSeconds = elapsed
+                    if elapsed >= Self.externalGenerationTimeoutSeconds {
+                        timeoutExternalGeneration()
+                        break
+                    }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             }
@@ -404,8 +408,25 @@ struct ComposerView: View {
                         Text(generatingStatusSubtitle)
                             .font(.caption2)
                             .foregroundStyle(.secondary)
+                        if externalSubmittedAt != nil {
+                            ProgressView(
+                                value: Double(Self.remainingExternalSeconds(elapsedSeconds)),
+                                total: Double(Self.externalGenerationTimeoutSeconds)
+                            )
+                            .progressViewStyle(.linear)
+                            .tint(BrandTheme.accent)
+                            .accessibilityLabel("AI 답변 대기 남은 시간")
+                            .accessibilityValue(Self.formatCountdown(Self.remainingExternalSeconds(elapsedSeconds)))
+                        }
                     }
                     Spacer()
+                    Button("취소") {
+                        cancelExternalGeneration()
+                    }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .buttonStyle(.plain)
+                    .accessibilityHint("현재 AI 요청을 중단하고 작성 화면으로 돌아갑니다")
                 }
                 .padding(10)
                 .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -434,12 +455,7 @@ struct ComposerView: View {
     private var generatingStatusTitle: String {
         if let provider = activeExternalProvider {
             if let _ = externalSubmittedAt {
-                if elapsedSeconds == 0 {
-                    return "정보를 보냈어요"
-                } else {
-                    let timeFormatted = Self.formatElapsedSeconds(elapsedSeconds)
-                    return "답변을 기다리는 중 (\(timeFormatted))"
-                }
+                return "답변을 기다리는 중"
             }
             return "\(provider.title)에 연결하는 중…"
         }
@@ -449,25 +465,44 @@ struct ComposerView: View {
     private var generatingStatusSubtitle: String {
         if let _ = activeExternalProvider {
             if let _ = externalSubmittedAt {
-                if elapsedSeconds == 0 {
-                    return "답변을 기다리는 중 (00초)"
-                } else {
-                    return "글이 완성되면 자동으로 채워져요"
-                }
+                return "남은 시간 \(Self.formatCountdown(Self.remainingExternalSeconds(elapsedSeconds)))"
             }
             return "입력창을 준비하고 있어요"
         }
         return "잠시만 기다려 주세요"
     }
 
-    private static func formatElapsedSeconds(_ seconds: Int) -> String {
-        if seconds < 60 {
-            return String(format: "%02d초", seconds)
-        } else {
-            let minutes = seconds / 60
-            let remainingSeconds = seconds % 60
-            return String(format: "%d분 %02d초", minutes, remainingSeconds)
-        }
+    private static let externalGenerationTimeoutSeconds = 119
+
+    private static func remainingExternalSeconds(_ elapsed: Int) -> Int {
+        max(0, externalGenerationTimeoutSeconds - elapsed)
+    }
+
+    private static func formatCountdown(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    @MainActor
+    private func cancelExternalGeneration() {
+        generationID = nil
+        browserContext = nil
+        activeExternalProvider = nil
+        pendingExternalProvider = nil
+        externalSubmittedAt = nil
+        elapsedSeconds = 0
+        isGenerating = false
+        statusMessage = "AI 요청을 취소했어요"
+    }
+
+    @MainActor
+    private func timeoutExternalGeneration() {
+        generationID = nil
+        browserContext = nil
+        activeExternalProvider = nil
+        externalSubmittedAt = nil
+        elapsedSeconds = 0
+        isGenerating = false
+        errorMessage = "1분 59초 동안 답변이 없어서 중단했어요. 다시 시도해 주세요."
     }
 
     @MainActor
@@ -1309,7 +1344,7 @@ private extension ExternalAIProvider {
         case .openAI: "ChatGPTBrand"
         case .gemini: "GeminiBrand"
         case .grok: "GrokBrand"
-        case .claude: nil
+        case .claude: "ClaudeBrand"
         }
     }
     var backgroundColor: Color {

@@ -226,11 +226,27 @@ struct ExternalAIBrowserSheet: View {
                 if let detectedErrorMessage {
                     errorBanner(detectedErrorMessage)
                 }
+                if submittedAt != nil, !hasImported, detectedErrorMessage == nil {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("답변을 기다리는 중")
+                            Spacer()
+                            Text("남은 시간 \(Self.formatCountdown(remainingSeconds))")
+                        }
+                        .font(.caption.weight(.semibold))
+                        ProgressView(value: Double(remainingSeconds), total: Double(Self.generationTimeoutSeconds))
+                            .progressViewStyle(.linear)
+                            .tint(BrandTheme.accent)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color(uiColor: .secondarySystemBackground))
+                }
                 ExternalAIWebView(provider: provider, bridge: bridge)
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("닫기") {
+                    Button("취소") {
                         onDismiss?()
                         dismiss()
                     }
@@ -304,6 +320,13 @@ struct ExternalAIBrowserSheet: View {
                 }
                 while !Task.isCancelled, !hasImported, detectedErrorMessage == nil {
                     elapsedSeconds = max(0, Int(Date().timeIntervalSince(submittedAt)))
+                    if elapsedSeconds >= Self.generationTimeoutSeconds {
+                        let message = "1분 59초 동안 답변이 없어서 중단했어요. 다시 시도해 주세요."
+                        detectedErrorMessage = message
+                        onError?(message)
+                        dismiss()
+                        break
+                    }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
                 }
             }
@@ -481,7 +504,7 @@ struct ExternalAIBrowserSheet: View {
             return "답변을 가져왔어요"
         }
         if bridge.isGenerating || hasSubmittedPrompt {
-            return "답변을 기다리는 중 (\(Self.formatElapsedSeconds(elapsedSeconds)))"
+            return "남은 시간 \(Self.formatCountdown(remainingSeconds))"
         }
         if !bridge.latestAnswer.isEmpty {
             return "답변이 끝나가는 중이에요…"
@@ -501,6 +524,12 @@ struct ExternalAIBrowserSheet: View {
             return "채우기 실패 · ⋯ 메뉴에서 다시 넣기나 문구 복사를 써 주세요"
         }
         return "입력창을 기다리는 중…"
+    }
+
+    private static let generationTimeoutSeconds = 119
+
+    private var remainingSeconds: Int {
+        max(0, Self.generationTimeoutSeconds - elapsedSeconds)
     }
 
     private var statusIcon: String {
@@ -525,51 +554,362 @@ struct ExternalAIBrowserSheet: View {
         onSubmitted?(date)
     }
 
-    private static func formatElapsedSeconds(_ seconds: Int) -> String {
-        if seconds < 60 {
-            return String(format: "%02d초", seconds)
+    private static func formatCountdown(_ seconds: Int) -> String {
+        String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+/// 설정 화면에서 하나의 AI 서비스 로그인 상태를 나타내는 세 가지 값.
+/// 쿠키 존재 여부나 로그인 버튼의 부재만으로는 판단하지 않고, 계정 메뉴 등
+/// 실제 로그인 후에만 나타나는 DOM 요소를 근거로 판단한다.
+enum ExternalAILoginStatus: Equatable, Sendable {
+    case checking
+    case loggedIn
+    case needsLogin
+
+    var title: String {
+        switch self {
+        case .checking: "확인 중"
+        case .loggedIn: "로그인됨"
+        case .needsLogin: "로그인 필요"
         }
-        return String(format: "%d분 %02d초", seconds / 60, seconds % 60)
+    }
+
+    var iconName: String {
+        switch self {
+        case .checking: "ellipsis.circle"
+        case .loggedIn: "checkmark.circle.fill"
+        case .needsLogin: "exclamationmark.circle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .checking: .secondary
+        case .loggedIn: .green
+        case .needsLogin: .orange
+        }
+    }
+}
+
+/// 설정 화면에 표시할 제공사별 로그인 상태를 보관한다.
+/// 실제 확인은 `ExternalAILoginStatusProbeView`가 웹뷰를 한 번에 하나씩만 띄워 순차적으로 수행한다.
+@MainActor
+final class ExternalAILoginStatusStore: ObservableObject {
+    @Published private(set) var statuses: [ExternalAIProvider: ExternalAILoginStatus] = [:]
+    @Published fileprivate var refreshToken = 0
+
+    func status(for provider: ExternalAIProvider) -> ExternalAILoginStatus {
+        statuses[provider] ?? .checking
+    }
+
+    func refreshAll() {
+        for provider in ExternalAIProvider.allCases {
+            statuses[provider] = .checking
+        }
+        refreshToken += 1
+    }
+
+    func markLoggedIn(_ provider: ExternalAIProvider) {
+        statuses[provider] = .loggedIn
+    }
+
+    fileprivate func setStatus(_ status: ExternalAILoginStatus, for provider: ExternalAIProvider) {
+        if statuses[provider] == .loggedIn && status == .checking {
+            return
+        }
+        statuses[provider] = status
+    }
+}
+
+/// 화면에 보이지 않는 웹뷰 하나로 제공사를 순서대로 방문해 로그인 상태를 확인한다.
+/// 세 개의 무거운 브라우저 뷰를 동시에 띄워 두지 않도록, 한 제공사 확인이 끝나야 다음으로 넘어간다.
+struct ExternalAILoginStatusProbeView: View {
+    @ObservedObject var store: ExternalAILoginStatusStore
+    @State private var currentIndex = 0
+
+    var body: some View {
+        ZStack {
+            if currentIndex < ExternalAIProvider.allCases.count {
+                let provider = ExternalAIProvider.allCases[currentIndex]
+                ExternalAILoginStatusSingleProbe(provider: provider) { status in
+                    store.setStatus(status, for: provider)
+                    currentIndex += 1
+                }
+                .id("\(store.refreshToken)-\(currentIndex)")
+                .frame(width: 375, height: 667)
+                .offset(x: -10_000, y: -10_000)
+            }
+        }
+        .frame(width: 0, height: 0)
+        .opacity(0.001)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .onChange(of: store.refreshToken) { _, _ in
+            currentIndex = 0
+        }
+    }
+}
+
+private struct ExternalAILoginStatusSingleProbe: View {
+    let provider: ExternalAIProvider
+    let onFinished: (ExternalAILoginStatus) -> Void
+
+    @StateObject private var bridge = ExternalAILoginProbeBridge()
+    @State private var hasFinished = false
+
+    var body: some View {
+        ExternalAILoginProbeWebView(provider: provider, bridge: bridge)
+            .task {
+                await runProbe()
+            }
+    }
+
+    private func runProbe() async {
+        let deadline = Date().addingTimeInterval(8)
+        while !Task.isCancelled, Date() < deadline, !hasFinished {
+            if bridge.loginOriginDetected {
+                finish(.needsLogin)
+                return
+            }
+            if bridge.isPageReady, !bridge.challengeOriginDetected {
+                let result = await bridge.checkAuthStatus(provider: provider)
+                guard !Task.isCancelled else { return }
+                if result.authenticated {
+                    finish(.loggedIn)
+                    return
+                }
+                if result.hasLogin {
+                    finish(.needsLogin)
+                    return
+                }
+                if result.hasChallenge {
+                    finish(.checking)
+                    return
+                }
+            }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+        }
+        guard !Task.isCancelled else { return }
+        // 네트워크 오류, 챌린지, 늦은 페이지 구성처럼 확실한 증거가 없는 경우에는
+        // 사용자가 로그인하지 않았다고 추측하지 않는다.
+        finish(.checking)
+    }
+
+    private func finish(_ status: ExternalAILoginStatus) {
+        guard !hasFinished else { return }
+        hasFinished = true
+        onFinished(status)
     }
 }
 
 /// 설정 화면에서 로그인만 하기 위해 여는 가벼운 브라우저.
 /// 프롬프트를 채우거나 답변을 읽지 않고, 제공사의 공식 로그인 페이지만 보여준다.
+/// 이미 로그인된 세션이면 DOM 상 계정 메뉴 등장을 감지해 성공을 짧게 알리고 자동으로 닫는다.
 struct ExternalAILoginSheet: View {
     let provider: ExternalAIProvider
+    var onLoginConfirmed: (() -> Void)? = nil
 
     @Environment(\.dismiss) private var dismiss
+    @StateObject private var bridge = ExternalAILoginProbeBridge()
+    @State private var didConfirmLogin = false
+    @State private var hasDismissed = false
 
     var body: some View {
         NavigationStack {
-            ExternalAILoginWebView(provider: provider)
-                .ignoresSafeArea(edges: .bottom)
-                .navigationTitle("\(provider.title) 로그인")
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("닫기") { dismiss() }
-                    }
+            VStack(spacing: 0) {
+                if didConfirmLogin {
+                    confirmedBanner
                 }
+                ExternalAILoginProbeWebView(provider: provider, bridge: bridge)
+                    .ignoresSafeArea(edges: .bottom)
+            }
+            .navigationTitle("\(provider.title) 로그인")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("닫기") { dismissOnce() }
+                }
+            }
+        }
+        .task(id: provider) {
+            await pollLoginStatus()
+        }
+    }
+
+    private func dismissOnce() {
+        guard !hasDismissed else { return }
+        hasDismissed = true
+        dismiss()
+    }
+
+    private var confirmedBanner: some View {
+        Label("로그인을 확인했어요", systemImage: "checkmark.circle.fill")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.green)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(Color(uiColor: .secondarySystemBackground))
+    }
+
+    private func pollLoginStatus() async {
+        while !Task.isCancelled, !didConfirmLogin {
+            if bridge.isPageReady,
+               !bridge.loginOriginDetected,
+               !bridge.challengeOriginDetected {
+                let result = await bridge.checkAuthStatus(provider: provider)
+                if result.authenticated {
+                    confirmLogin()
+                    return
+                }
+            }
+            try? await Task.sleep(nanoseconds: 600_000_000)
+        }
+    }
+
+    private func confirmLogin() {
+        guard !didConfirmLogin else { return }
+        didConfirmLogin = true
+        onLoginConfirmed?()
+        Task {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            dismissOnce()
         }
     }
 }
 
-private struct ExternalAILoginWebView: UIViewRepresentable {
+struct ExternalAIAuthProbeResult: Sendable {
+    let authenticated: Bool
+    let hasLogin: Bool
+    let hasChallenge: Bool
+}
+
+/// 로그인 상태 확인에 쓰는 최소한의 웹뷰 브릿지.
+/// 프롬프트 자동 입력이나 답변 읽기는 하지 않고, 내비게이션 상태와 로그인 판별만 담당한다.
+@MainActor
+final class ExternalAILoginProbeBridge: ObservableObject {
+    @Published fileprivate(set) var isPageReady = false
+    @Published fileprivate(set) var loginOriginDetected = false
+    @Published fileprivate(set) var challengeOriginDetected = false
+
+    fileprivate weak var webView: WKWebView?
+
+    fileprivate func didStartNavigation() {
+        isPageReady = false
+    }
+
+    fileprivate func checkURL(_ urlString: String) {
+        loginOriginDetected = ExternalAIBrowserBridge.isLoginURL(urlString)
+        challengeOriginDetected = ExternalAIBrowserBridge.isChallengeURL(urlString)
+    }
+
+    fileprivate func markNavigationFinished() {
+        isPageReady = true
+    }
+
+    func checkAuthStatus(provider: ExternalAIProvider) async -> ExternalAIAuthProbeResult {
+        guard let webView else {
+            return ExternalAIAuthProbeResult(authenticated: false, hasLogin: false, hasChallenge: false)
+        }
+        if let url = webView.url?.absoluteString {
+            checkURL(url)
+        }
+        let script = ExternalAIBrowserScripts.authStatusProbeScript(for: provider)
+        do {
+            let result = try await webView.evaluateJavaScript(script)
+            return Self.parseAuthProbeResult(result)
+        } catch {
+            return ExternalAIAuthProbeResult(authenticated: false, hasLogin: false, hasChallenge: false)
+        }
+    }
+
+    private static func parseAuthProbeResult(_ raw: Any?) -> ExternalAIAuthProbeResult {
+        if let dict = raw as? [String: Any] {
+            let authenticated = (dict["authenticated"] as? Bool) ?? false
+            let hasLogin = (dict["hasLogin"] as? Bool) ?? false
+            let hasChallenge = (dict["hasChallenge"] as? Bool) ?? false
+            return ExternalAIAuthProbeResult(authenticated: authenticated, hasLogin: hasLogin, hasChallenge: hasChallenge)
+        }
+        if let string = raw as? String,
+           let data = string.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            let authenticated = (json["authenticated"] as? Bool) ?? false
+            let hasLogin = (json["hasLogin"] as? Bool) ?? false
+            let hasChallenge = (json["hasChallenge"] as? Bool) ?? false
+            return ExternalAIAuthProbeResult(authenticated: authenticated, hasLogin: hasLogin, hasChallenge: hasChallenge)
+        }
+        return ExternalAIAuthProbeResult(authenticated: false, hasLogin: false, hasChallenge: false)
+    }
+}
+
+private struct ExternalAILoginProbeWebView: UIViewRepresentable {
     let provider: ExternalAIProvider
+    @ObservedObject var bridge: ExternalAILoginProbeBridge
+
+    func makeCoordinator() -> Coordinator { Coordinator(bridge: bridge) }
 
     func makeUIView(context: Context) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         // 앱 안에서만 쓰는 영구 저장소. Composer의 AI 브라우저와 이 저장소를 공유해 로그인이
         // 이어지지만, 사파리의 쿠키 저장소와는 별개이며 제공사가 세션을 만료시키면 다시 로그인해야 한다.
         configuration.websiteDataStore = .default()
-        let webView = WKWebView(frame: .zero, configuration: configuration)
+        let webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 375, height: 667), configuration: configuration)
+        webView.navigationDelegate = context.coordinator
         webView.allowsBackForwardNavigationGestures = true
+        bridge.webView = webView
         webView.load(URLRequest(url: provider.chatURL))
         return webView
     }
 
     func updateUIView(_ uiView: WKWebView, context: Context) {}
+
+    static func dismantleUIView(_ uiView: WKWebView, coordinator: Coordinator) {
+        uiView.stopLoading()
+        uiView.navigationDelegate = nil
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, WKNavigationDelegate {
+        private let bridge: ExternalAILoginProbeBridge
+
+        init(bridge: ExternalAILoginProbeBridge) {
+            self.bridge = bridge
+        }
+
+        func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+            bridge.didStartNavigation()
+            if let url = webView.url?.absoluteString {
+                bridge.checkURL(url)
+            }
+        }
+
+        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+            if let url = webView.url?.absoluteString {
+                bridge.checkURL(url)
+            }
+            bridge.markNavigationFinished()
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+        ) {
+            if let url = navigationAction.request.url?.absoluteString {
+                bridge.checkURL(url)
+            }
+            decisionHandler(.allow)
+        }
+
+        func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+            bridge.markNavigationFinished()
+        }
+
+        func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+            bridge.markNavigationFinished()
+        }
+    }
 }
 
 /// WKWebView 안 상태(페이지 준비, 생성 중, 답변 안정 여부, 오류 감지)를 SwiftUI로 전달하는 저장소.
@@ -588,12 +928,25 @@ final class ExternalAIBrowserBridge: ObservableObject {
     fileprivate weak var webView: WKWebView?
 
     func checkURLForInteraction(_ urlString: String) {
-        let lower = urlString.lowercased()
-        if lower.contains("accounts.google.com") || lower.contains("auth.openai.com") || lower.contains("claude.ai/login") || lower.contains("/login") || lower.contains("/signin") || lower.contains("auth0") {
+        if Self.isLoginURL(urlString) {
             interactionReason = .login
-        } else if lower.contains("challenge") || lower.contains("checkpoint") || lower.contains("cloudflare") || lower.contains("turnstile") || lower.contains("recaptcha") {
+        } else if Self.isChallengeURL(urlString) {
             interactionReason = .captcha
         }
+    }
+
+    static func isLoginURL(_ urlString: String) -> Bool {
+        let lower = urlString.lowercased()
+        return lower.contains("accounts.google.com") || lower.contains("auth.openai.com") || lower.contains("claude.ai/login") || lower.contains("/login") || lower.contains("/signin") || lower.contains("/signup") || lower.contains("auth0")
+    }
+
+    static func isChallengeURL(_ urlString: String) -> Bool {
+        let lower = urlString.lowercased()
+        return lower.contains("challenge") || lower.contains("checkpoint") || lower.contains("cloudflare") || lower.contains("turnstile") || lower.contains("recaptcha")
+    }
+
+    static func isLoginOrChallengeURL(_ urlString: String) -> Bool {
+        isLoginURL(urlString) || isChallengeURL(urlString)
     }
 
     /// 입력창에 프롬프트를 채운다. 자동으로 보내지는 않는다.
@@ -763,7 +1116,11 @@ private struct ExternalAIWebView: UIViewRepresentable {
             bridge.markNavigationFinished()
         }
 
-        func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+        ) {
             if let url = navigationAction.request.url?.absoluteString {
                 bridge.checkURLForInteraction(url)
             }
@@ -1072,6 +1429,79 @@ private enum ExternalAIBrowserScripts {
         let assistant: [String]
         let generating: [String]
         let send: [String]
+        let authenticated: [String]
+        let login: [String]
+        let challenge: [String]
+    }
+
+    static func authStatusProbeScript(for provider: ExternalAIProvider) -> String {
+        let config = selectors(for: provider)
+        return """
+        (function() {
+          try {
+            const inputSelectors = \(jsArray(config.input));
+            const authMarkerSelectors = \(jsArray(config.authenticated));
+            const loginSelectors = \(jsArray(config.login));
+            const challengeSelectors = \(jsArray(config.challenge));
+
+            function isVisible(el) {
+              if (!el) return false;
+              const style = window.getComputedStyle(el);
+              if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+              return el.offsetWidth > 0 || el.offsetHeight > 0 || el.getClientRects().length > 0;
+            }
+
+            function queryFirstVisible(selectors) {
+              for (const sel of selectors) {
+                try {
+                  const els = document.querySelectorAll(sel);
+                  for (const el of els) {
+                    if (isVisible(el)) return el;
+                  }
+                } catch (e) {}
+              }
+              return null;
+            }
+
+            // 1. 보안 챌린지 검사
+            const challengeEl = queryFirstVisible(challengeSelectors);
+            if (challengeEl) {
+              return JSON.stringify({ authenticated: false, hasLogin: false, hasChallenge: true });
+            }
+
+            // 2. 긍정적 인증 증거 (컴포저/입력창 또는 인증 전용 마커) 검사
+            const inputEl = queryFirstVisible(inputSelectors);
+            const authMarkerEl = queryFirstVisible(authMarkerSelectors);
+            if (inputEl || authMarkerEl) {
+              return JSON.stringify({ authenticated: true, hasLogin: false, hasChallenge: false });
+            }
+
+            // 3. 로그인 화면/버튼 검사 (제공사별 선택자 + 일반 로그인 링크/버튼)
+            const loginEl = queryFirstVisible(loginSelectors);
+            if (loginEl) {
+              return JSON.stringify({ authenticated: false, hasLogin: true, hasChallenge: false });
+            }
+
+            const controls = Array.from(document.querySelectorAll('a, button'));
+            for (const el of controls) {
+              if (!isVisible(el)) continue;
+              const href = String(el.getAttribute('href') || '').toLowerCase();
+              if (href.includes('/login') || href.includes('/signin') || href.includes('accounts.google.com') || href.includes('auth.openai.com')) {
+                return JSON.stringify({ authenticated: false, hasLogin: true, hasChallenge: false });
+              }
+              const text = String(el.innerText || el.getAttribute('aria-label') || '').trim().toLowerCase();
+              if (text === '로그인' || text === '로그인하기' || text === 'log in' || text === 'login' || text === 'sign in') {
+                return JSON.stringify({ authenticated: false, hasLogin: true, hasChallenge: false });
+              }
+            }
+
+            // 4. 아직 렌더링/하이드레이션 대기 중
+            return JSON.stringify({ authenticated: false, hasLogin: false, hasChallenge: false });
+          } catch (e) {
+            return JSON.stringify({ authenticated: false, hasLogin: false, hasChallenge: false, error: e.message || String(e) });
+          }
+        })();
+        """
     }
 
     private static func selectors(for provider: ExternalAIProvider) -> Selectors {
@@ -1080,12 +1510,17 @@ private enum ExternalAIBrowserScripts {
             Selectors(
                 input: [
                     "#prompt-textarea",
+                    "textarea[data-id='root']",
                     "div[contenteditable='true']#prompt-textarea",
+                    "div#prompt-textarea",
                     "form div[contenteditable='true']",
+                    "div[role='textbox']",
                     "textarea[data-testid]"
                 ],
                 assistant: [
-                    "[data-message-author-role='assistant']"
+                    "[data-message-author-role='assistant']",
+                    "div.agent-turn",
+                    "div[data-testid*='conversation-turn'] .markdown"
                 ],
                 generating: [
                     "button[data-testid='stop-button']",
@@ -1098,7 +1533,33 @@ private enum ExternalAIBrowserScripts {
                     "form button[type='submit']",
                     "button[aria-label*='프롬프트 보내기']",
                     "button[aria-label*='Send']",
-                    "button[aria-label*='보내기']"
+                    "button[aria-label*='보내기']",
+                    "button:has(svg[data-icon='arrow-up'])"
+                ],
+                authenticated: [
+                    "#prompt-textarea",
+                    "div#prompt-textarea",
+                    "button[data-testid='profile-button']",
+                    "button[data-testid='user-menu-button']",
+                    "button[data-testid='composer-speech-button']",
+                    "nav a[href*='/c/']",
+                    "nav[aria-label='Chat history']",
+                    "a[href='/settings/general']"
+                ],
+                login: [
+                    "button[data-testid='login-button']",
+                    "a[href*='/auth/login']",
+                    "a[href*='/login']",
+                    "button[data-testid='signup-button']",
+                    "a[href*='/signup']",
+                    "button[data-testid='welcome-login-button']"
+                ],
+                challenge: [
+                    "#cf-challenge-running",
+                    "iframe[src*='challenges.cloudflare.com']",
+                    "#challenge-form",
+                    ".cf-turnstile",
+                    "iframe[src*='turnstile']"
                 ]
             )
         case .gemini:
@@ -1106,36 +1567,74 @@ private enum ExternalAIBrowserScripts {
                 input: [
                     "div.ql-editor[contenteditable='true']",
                     "rich-textarea div[contenteditable='true']",
+                    "rich-textarea p",
                     "div[aria-label*='프롬프트']",
+                    "div[aria-label*='prompt']",
                     "div[contenteditable='true']",
+                    "div[role='textbox']",
                     "textarea"
                 ],
                 assistant: [
                     "model-response .markdown",
                     "message-content .markdown",
                     "div.model-response-text",
-                    "model-response"
+                    "div[data-test-id='model-response']",
+                    "message-content",
+                    "model-response",
+                    ".response-container-content"
                 ],
                 generating: [
                     "button[aria-label*='Stop']",
                     "button[aria-label*='중지']",
+                    "button.stop-generating-button",
                     "mat-progress-spinner",
-                    ".loading-indicator"
+                    ".loading-indicator",
+                    "div.sparkle-loading"
                 ],
                 send: [
                     "button.send-button",
                     "button[aria-label*='Send']",
-                    "button[aria-label*='보내기']"
+                    "button[aria-label*='보내기']",
+                    "button[mat-icon-button][aria-label*='send']",
+                    "button[type='submit']"
+                ],
+                authenticated: [
+                    "a[aria-label*='Google Account']",
+                    "a[aria-label*='Google 계정']",
+                    "button[aria-label*='Google Account']",
+                    "button[aria-label*='Google 계정']",
+                    "img.gbii",
+                    "img[alt*='Google Account']",
+                    "bard-mode-switcher",
+                    "div.ql-editor",
+                    "rich-textarea"
+                ],
+                login: [
+                    "a[href*='accounts.google.com/ServiceLogin']",
+                    "a[aria-label*='Sign in']",
+                    "button[aria-label*='Sign in']",
+                    "button[aria-label*='로그인']",
+                    "a[aria-label*='로그인']",
+                    "a[href*='/signin']",
+                    "a[href*='accounts.google.com']",
+                    "button[data-testid*='login']"
+                ],
+                challenge: [
+                    "iframe[src*='recaptcha']",
+                    "div.g-recaptcha",
+                    "#challenge-stage"
                 ]
             )
         case .grok:
             Selectors(
                 input: [
                     "textarea",
-                    "div[contenteditable='true']"
+                    "div[contenteditable='true']",
+                    "div[role='textbox']"
                 ],
                 assistant: [
                     "[data-testid='grok-response']",
+                    "div.response-body",
                     "div.message-bubble",
                     "div[class*='message'][class*='assistant']"
                 ],
@@ -1147,6 +1646,18 @@ private enum ExternalAIBrowserScripts {
                     "button[aria-label*='Send']",
                     "button[aria-label*='보내기']",
                     "button[type='submit']"
+                ],
+                authenticated: [
+                    "textarea",
+                    "button[data-testid='user-menu-button']"
+                ],
+                login: [
+                    "a[href*='/login']",
+                    "button[data-testid*='login']",
+                    "a[href*='/signin']"
+                ],
+                challenge: [
+                    "iframe[src*='challenges']"
                 ]
             )
         case .claude:
@@ -1154,22 +1665,52 @@ private enum ExternalAIBrowserScripts {
                 input: [
                     "div.ProseMirror[contenteditable='true']",
                     "div[contenteditable='true'][data-placeholder]",
+                    "div[contenteditable='true'][role='textbox']",
+                    "fieldset div[contenteditable='true']",
                     "div[contenteditable='true']"
                 ],
                 assistant: [
                     "[data-is-streaming] .font-claude-response-body",
                     ".font-claude-response-body",
-                    "div[data-testid*='assistant']"
+                    "div.font-claude-message",
+                    "div[data-testid*='assistant']",
+                    "div[data-testid='assistant-message']",
+                    ".standard-grid .font-user-message + div"
                 ],
                 generating: [
                     "button[aria-label*='Stop']",
-                    "button[aria-label*='중지']"
+                    "button[aria-label*='중단']",
+                    "button[aria-label*='중지']",
+                    "button[aria-label*='Stop generating']",
+                    "div[data-is-streaming='true']"
                 ],
                 send: [
                     "button[aria-label='Send Message']",
                     "button[aria-label*='Send']",
+                    "button[aria-label*='전송']",
                     "button[aria-label*='보내기']",
+                    "button:has(svg[data-icon='paper-plane'])",
+                    "fieldset button[type='button']:not([disabled])",
                     "button[type='submit']"
+                ],
+                authenticated: [
+                    "div.ProseMirror[contenteditable='true']",
+                    "button[data-testid='user-menu-button']",
+                    "button[data-testid='chat-input-send-button']",
+                    "button[aria-label*='account menu']",
+                    "a[href='/settings/profile']"
+                ],
+                login: [
+                    "input[type='email'][name='email']",
+                    "a[href*='/login']",
+                    "button[data-testid*='login']",
+                    "a[href*='/signup']",
+                    "button[data-testid*='signup']"
+                ],
+                challenge: [
+                    "iframe[src*='cloudflare']",
+                    "div#challenge-stage",
+                    "iframe[src*='turnstile']"
                 ]
             )
         }

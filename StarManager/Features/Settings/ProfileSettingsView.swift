@@ -12,6 +12,7 @@ struct ProfileSettingsView: View {
     @AppStorage(SharedGenerationSettings.showsExternalAIBrowserKey) private var showsExternalAIBrowser = false
     @State private var presetName = ""
     @State private var loginProvider: ExternalAIProvider?
+    @StateObject private var loginStatusStore = ExternalAILoginStatusStore()
 
     var body: some View {
         Form {
@@ -135,18 +136,25 @@ struct ProfileSettingsView: View {
                     .accessibilityHint("켜면 외부 AI가 글을 만드는 브라우저를 처음부터 보여줍니다")
 
                 ForEach(ExternalAIProvider.allCases) { provider in
+                    let status = loginStatusStore.status(for: provider)
                     Button {
                         loginProvider = provider
                     } label: {
                         HStack {
                             Text(provider.title).foregroundStyle(.primary)
                             Spacer()
-                            Label("로그인 열기", systemImage: "arrow.up.right.square")
+                            Label(status.title, systemImage: status.iconName)
                                 .labelStyle(.titleAndIcon)
                                 .font(.footnote)
+                                .foregroundStyle(status.color)
                         }
                     }
-                    .accessibilityHint("\(provider.title) 공식 로그인 페이지를 앱 안에서 엽니다")
+                    .accessibilityLabel("\(provider.title), \(status.title)")
+                    .accessibilityHint(
+                        status == .loggedIn
+                            ? "\(provider.title) 계정 페이지를 앱 안에서 다시 엽니다"
+                            : "\(provider.title) 공식 로그인 페이지를 앱 안에서 엽니다"
+                    )
                 }
             } header: {
                 BrandSectionTitle(title: "외부 AI 로그인 관리", systemImage: "person.badge.key.fill")
@@ -172,12 +180,20 @@ struct ProfileSettingsView: View {
         .frame(maxWidth: .infinity)
         .scrollContentBackground(.hidden)
         .background(theme.canvasGradient)
+        .background(
+            ExternalAILoginStatusProbeView(store: loginStatusStore)
+        )
         .navigationTitle("나의 취향")
+        .onAppear {
+            loginStatusStore.refreshAll()
+        }
         .onChange(of: appearanceStyleRaw) { _, newValue in
             updateAppIcon(for: newValue)
         }
         .sheet(item: $loginProvider) { provider in
-            ExternalAILoginSheet(provider: provider)
+            ExternalAILoginSheet(provider: provider) {
+                loginStatusStore.markLoggedIn(provider)
+            }
         }
     }
 
