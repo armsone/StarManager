@@ -4,20 +4,21 @@ import Foundation
 /// 사람마다 다른 글쓰기 취향을 담는 값. 특정 개인(운영자)의 말투나 기본 문구를 강제하지 않고,
 /// 모든 항목은 사용자가 직접 채우거나 비워 둘 수 있는 중립 값으로 시작한다.
 struct CreatorProfile: Codable, Equatable, Sendable {
-    /// 주로 쓰는 주제. 비어 있으면 프롬프트에 포함하지 않는다.
+    /// 예전 저장 데이터 호환용으로만 남아 있음. 화면에 보이지 않고 프롬프트·검증 어디에도 쓰이지 않는다.
     var accountTopic: String
-    /// 글을 읽을 사람. 비어 있으면 프롬프트에 포함하지 않는다.
+    /// 예전 저장 데이터 호환용으로만 남아 있음. 화면에 보이지 않고 프롬프트·검증 어디에도 쓰이지 않는다.
     var audience: String
     /// "내 글 반영" 정도(원문을 얼마나 유지할지).
     var preferredLength: PostLength
     /// 이모지 사용 강도(4단계).
     var emojiIntensity: EmojiIntensity
+    /// 예전 저장 데이터 호환용으로만 남아 있음. 화면에 보이지 않고 프롬프트·검증 어디에도 쓰이지 않는다.
     var prohibitedPhrases: String
-    /// 해시태그 취향. 비어 있으면 프롬프트에 포함하지 않는다.
+    /// 예전 저장 데이터 호환용으로만 남아 있음. 화면에 보이지 않고 프롬프트·검증 어디에도 쓰이지 않는다.
     var hashtagStyle: String
     /// 설정 화면의 다른 항목으로 표현되지 않는 나머지 요구사항을 사용자가 직접 적는 자유 입력란.
     var detailedGuidelines: String
-    /// 게시할 곳(플랫폼별 글자 수 기준에 영향을 준다).
+    /// 예전 저장 데이터 호환용으로만 남아 있음. 화면에 보이지 않고 프롬프트·검증 어디에도 쓰이지 않는다.
     var destination: PostDestination
     /// 글을 읽을 나잇대 힌트. 프롬프트의 독자 나잇대 힌트로만 쓰이고 다른 설정을 바꾸지 않는다.
     var ageGroup: AudienceAgeGroup
@@ -33,6 +34,12 @@ struct CreatorProfile: Codable, Equatable, Sendable {
     var controls: GenerationControls {
         get { generationControls ?? GenerationControls() }
         set { generationControls = newValue }
+    }
+
+    var characterCountPromptInstruction: String {
+        let target = controls.characterCount
+        let tolerance = max(5, target / 10)
+        return "완성 문구를 \(target - tolerance)~\(target + tolerance)자 사이로 써"
     }
 
     init(
@@ -119,17 +126,6 @@ struct CreatorProfile: Codable, Equatable, Sendable {
         try container.encodeIfPresent(additionalInstructions, forKey: .additionalInstructions)
     }
 
-    /// 사용자에게 노출하는 목표 글자 수 범위.
-    static let characterCountRange = 50...500
-
-    /// 목표 글자 수를 min(500, 게시 기준 글자 수) 범위 안으로, 최소 50자 이상으로 맞춘다.
-    mutating func clampCharacterCountToDestinationLimit() {
-        let upperBound = min(Self.characterCountRange.upperBound, destination.characterLimit)
-        var updatedControls = controls
-        updatedControls.characterCount = min(max(updatedControls.characterCount, Self.characterCountRange.lowerBound), upperBound)
-        controls = updatedControls
-    }
-
     /// 모든 AI에 동일하게 전달하는 단일 요청문.
     /// 여기 나오는 항목은 전부 작성 화면에서 보이는 값이거나 "추가로 하고 싶은 설정"에 사용자가 직접 적은 내용이다.
     func generationPrompt(for idea: String, mood: PostMood, length: PostLength) -> String {
@@ -138,9 +134,8 @@ struct CreatorProfile: Codable, Equatable, Sendable {
             idea.trimmingCharacters(in: .whitespacesAndNewlines),
             "",
             "[원하는 결과]",
-            "위 내용을 바탕으로 \(destination.title)에 올릴 한국어 글을 쓰고, 완성 문구만 출력해.",
-            "- 게시 기준: \(destination.limitBasisDescription)",
-            "- 목표 분량: 공백과 줄바꿈 포함 \(controls.characterCount)자를 넘지 않는 선에서 자연스럽게 (억지로 글자 수를 맞추려고 문장을 늘리거나 자르지 마)",
+            "위 내용을 바탕으로 올릴 한국어 글을 쓰고, 완성 문구만 출력해.",
+            "- 글자 수: \(characterCountPromptInstruction)",
             "- 나잇대: \(ageGroup.promptAudienceHint)",
             "- 분위기: \(mood.rawValue)",
             "- 원문 반영: \(length.promptInstruction)",
@@ -149,10 +144,6 @@ struct CreatorProfile: Codable, Equatable, Sendable {
             "- 말투: \(tone.promptInstruction)",
             "- 줄넘김: \(lineBreakFrequency.promptInstruction)"
         ]
-        if !accountTopic.isEmpty { lines.append("- 주로 쓰는 주제: \(accountTopic)") }
-        if !audience.isEmpty { lines.append("- 읽을 사람: \(audience)") }
-        if !prohibitedPhrases.isEmpty { lines.append("- 금지 표현: \(prohibitedPhrases)") }
-        if !hashtagStyle.isEmpty { lines.append("- 해시태그 취향: \(hashtagStyle)") }
         let details = detailedGuidelines.trimmingCharacters(in: .whitespacesAndNewlines)
         if !details.isEmpty { lines.append("- 추가로 하고 싶은 설정: \(details)") }
         let extra = (additionalInstructions ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -161,6 +152,7 @@ struct CreatorProfile: Codable, Equatable, Sendable {
     }
 }
 
+/// 예전 저장 데이터 호환용으로만 남아 있음. 더 이상 화면에 노출되지 않고 프롬프트에도 쓰이지 않는다.
 struct GenerationControls: Codable, Equatable, Sendable {
     var characterCount = 200
 }
@@ -197,6 +189,7 @@ enum AudienceAgeGroup: String, CaseIterable, Identifiable, Codable, Sendable {
 enum PostStyle: String, CaseIterable, Identifiable, Codable, Sendable {
     case memo
     case poem
+    case rapper
     case diary
     case essay
     case novel
@@ -207,6 +200,7 @@ enum PostStyle: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .memo: "메모"
         case .poem: "시"
+        case .rapper: "랩퍼"
         case .diary: "일기"
         case .essay: "수필"
         case .novel: "소설"
@@ -217,9 +211,22 @@ enum PostStyle: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .memo: "짧고 간결한 메모 형식으로"
         case .poem: "시적인 형식으로, 행과 여백을 살려서"
+        case .rapper: "라임과 리듬이 살아있는 랩 가사 형식으로"
         case .diary: "그날의 일을 적는 일기 형식으로"
         case .essay: "생각과 경험을 풀어내는 수필 형식으로"
         case .novel: "소설처럼 장면과 서사가 있는 형식으로"
+        }
+    }
+
+    /// 작성 화면의 압축 선택 컨트롤에 쓰는 아이콘.
+    var compactIcon: String {
+        switch self {
+        case .memo: "note.text"
+        case .poem: "text.quote"
+        case .rapper: "music.mic"
+        case .diary: "book.closed"
+        case .essay: "doc.text"
+        case .novel: "books.vertical"
         }
     }
 }
@@ -300,9 +307,30 @@ enum EmojiIntensity: String, CaseIterable, Identifiable, Codable, Sendable {
         case .heavy: "문장마다 이모지를 과감하게 여러 개 사용한다"
         }
     }
+
+    /// 작성 화면의 압축 선택 컨트롤에 쓰는 아이콘.
+    var compactIcon: String {
+        switch self {
+        case .none: "nosign"
+        case .low: "face.smiling"
+        case .high: "sparkles"
+        case .heavy: "flame.fill"
+        }
+    }
+
+    /// 압축 선택 컨트롤에서 쓰는 짧은 시각 라벨. 접근성 라벨은 별도의 전체 title을 사용한다.
+    var compactLabel: String {
+        switch self {
+        case .none: "안씀"
+        case .low: "최소한"
+        case .high: "적극적"
+        case .heavy: "과하게"
+        }
+    }
 }
 
-/// 게시할 곳. 플랫폼별 공개 글자 수 기준을 프롬프트와 목표 글자 수 상한에 반영한다.
+/// 예전 저장 데이터 호환용으로만 남아 있는 타입. 더 이상 화면에 노출되지 않고,
+/// 프롬프트나 글자 수 검증 어디에도 쓰이지 않는다.
 enum PostDestination: String, CaseIterable, Identifiable, Codable, Sendable {
     case instagram
     case kakaoTalk

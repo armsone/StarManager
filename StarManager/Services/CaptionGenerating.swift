@@ -90,20 +90,19 @@ struct DeviceIntelligenceCaptionGenerator: CaptionGenerating {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             var report = CaptionFormatReport.evaluate(
                 response,
-                destinationLimit: profile.destination.characterLimit
+                destinationLimit: CaptionFormatReport.neutralSafetyCharacterLimit
             )
 
             if !report.passesAllRules {
                 let repairPrompt = """
                 방금 결과를 아래 실패 항목만 고쳐서 완성 문구만 다시 출력하세요.
                 실패 항목: \(report.failedRuleDescriptions.joined(separator: ", "))
-                공백과 줄바꿈 포함 \(profile.destination.characterLimit)자를 넘지 않아야 합니다.
                 """
                 response = try await session.respond(to: repairPrompt).content
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 report = CaptionFormatReport.evaluate(
                     response,
-                    destinationLimit: profile.destination.characterLimit
+                    destinationLimit: CaptionFormatReport.neutralSafetyCharacterLimit
                 )
             }
 
@@ -116,9 +115,7 @@ struct DeviceIntelligenceCaptionGenerator: CaptionGenerating {
                 caption: lines.dropFirst().dropLast().joined(separator: "\n"),
                 callToAction: lines.last ?? "",
                 hashtags: hashtags,
-                composedText: response,
-                targetCharacterCount: profile.controls.characterCount,
-                destinationCharacterLimit: profile.destination.characterLimit
+                composedText: response
             )
         }
 #endif
@@ -319,7 +316,7 @@ struct BackendCaptionGenerator: CaptionGenerating {
             prompt: profile.generationPrompt(for: idea, mood: mood, length: length),
             mood: mood.rawValue,
             length: length.rawValue,
-            targetCharacterCount: profile.controls.characterCount
+            targetCharacterCount: CaptionFormatReport.neutralSafetyCharacterLimit
         ))
 
         let (data, response) = try await session.data(for: request)
@@ -330,7 +327,7 @@ struct BackendCaptionGenerator: CaptionGenerating {
         }
         let payload = try JSONDecoder().decode(BackendCaptionResponse.self, from: data)
         let text = payload.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let report = CaptionFormatReport.evaluate(text, destinationLimit: profile.destination.characterLimit)
+        let report = CaptionFormatReport.evaluate(text, destinationLimit: CaptionFormatReport.neutralSafetyCharacterLimit)
         guard report.passesAllRules else { throw AIBackendError.invalidFormat(report.failedRuleDescriptions) }
 
         let lines = text.components(separatedBy: "\n")
@@ -341,9 +338,7 @@ struct BackendCaptionGenerator: CaptionGenerating {
             caption: lines.dropFirst().dropLast().joined(separator: "\n"),
             callToAction: lines.last ?? "",
             hashtags: hashtags,
-            composedText: text,
-            targetCharacterCount: profile.controls.characterCount,
-            destinationCharacterLimit: profile.destination.characterLimit
+            composedText: text
         )
     }
 }
@@ -365,7 +360,8 @@ struct BackendImageGenerator: Sendable {
             provider: provider.rawValue,
             sourceIdea: post.sourceIdea,
             postText: post.composedText,
-            accountTopic: profile.accountTopic,
+            // 예전 저장 데이터에 남아 있을 수 있는 값이라도 이미지 생성 요청에 영향을 주지 않게 항상 빈 값으로 보낸다.
+            accountTopic: "",
             voice: "",
             aspectRatio: aspectRatio
         ))
@@ -553,8 +549,8 @@ struct DirectAICaptionGenerator: CaptionGenerating {
 
         var text = try await requestText(prompt: basePrompt)
         let validationContext = CaptionValidationContext(
-            destinationLimit: profile.destination.characterLimit,
-            prohibitedPhrases: profile.prohibitedPhrases,
+            destinationLimit: CaptionFormatReport.neutralSafetyCharacterLimit,
+            prohibitedPhrases: "",
             emojiIntensity: profile.emojiIntensity
         )
         var report = CaptionValidationReport.evaluate(text, context: validationContext)
@@ -563,7 +559,6 @@ struct DirectAICaptionGenerator: CaptionGenerating {
             let repairPrompt = """
             아래 이전 결과를 실패 항목에 맞춰 고친 뒤 완성 문구만 다시 출력하세요.
             실패 항목: \(report.failedRuleDescriptions.joined(separator: ", "))
-            공백과 줄바꿈 포함 \(profile.destination.characterLimit)자를 넘지 않아야 합니다.
 
             이전 결과:
             \(text)
@@ -582,9 +577,7 @@ struct DirectAICaptionGenerator: CaptionGenerating {
             caption: lines.dropFirst().dropLast().joined(separator: "\n"),
             callToAction: lines.last ?? "",
             hashtags: hashtags,
-            composedText: text,
-            targetCharacterCount: profile.controls.characterCount,
-            destinationCharacterLimit: profile.destination.characterLimit
+            composedText: text
         )
     }
 
@@ -735,7 +728,7 @@ struct PreviewCaptionGenerator: CaptionGenerating {
 
         let cleanIdea = Self.sanitize(idea)
         var seed = Self.seed(from: cleanIdea + mood.rawValue + length.rawValue + profile.emojiIntensity.rawValue)
-        let limit = max(20, min(profile.controls.characterCount, profile.destination.characterLimit))
+        let limit = min(max(profile.controls.characterCount, 50), 500)
         let symbol = Self.paragraphEmoji(for: mood)
         let (leadEmoji, bodyEmoji, summaryEmoji): (String?, String, String) = switch profile.emojiIntensity {
         case .none: (nil, "", "")
@@ -755,9 +748,7 @@ struct PreviewCaptionGenerator: CaptionGenerating {
         var lines = [leadLine]
         var used = leadLine.count
 
-        let banned = Self.bannedPhrases(in: profile.prohibitedPhrases)
         let bank = Self.rotated(Self.sentenceBank(for: mood), seed: &seed)
-            .filter { sentence in !banned.contains { sentence.contains($0) } }
 
         for sentence in bank {
             let candidate = bodyEmoji.isEmpty ? sentence : "\(bodyEmoji) \(sentence)"
@@ -787,8 +778,7 @@ struct PreviewCaptionGenerator: CaptionGenerating {
             callToAction: lines.last ?? "",
             hashtags: [],
             composedText: composedText,
-            targetCharacterCount: profile.controls.characterCount,
-            destinationCharacterLimit: profile.destination.characterLimit
+            targetCharacterCount: limit
         )
     }
 
@@ -799,12 +789,6 @@ struct PreviewCaptionGenerator: CaptionGenerating {
             .split(whereSeparator: \.isNewline)
             .joined(separator: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func bannedPhrases(in raw: String) -> [String] {
-        raw.split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
     }
 
     // MARK: - 줄 구성

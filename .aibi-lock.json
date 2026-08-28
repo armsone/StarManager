@@ -2,15 +2,15 @@
   "schemaVersion": 1,
   "repositories": {
     "starmanager-ios": {
-      "version": "0.2.0",
+      "version": "0.2.1",
       "files": {
         "StarManager/Features/Composer/ExternalAIBrowserView.swift": {
-          "sha256": "b2c98f5a3aab2431f853e83e72c880b2acdf75f2fd5dfe40dbc9ea23e3018bcf",
+          "sha256": "3329a36c749000af58f96c6d3f44208a0154827c332167e14039264913ed1de3",
           "source": "profiles/starmanager/distribution/ios/ExternalAIBrowserView.swift"
         }
       }
     }
   },
   "consumer": "starmanager",
-  "aibiVersion": "0.2.0"
+  "aibiVersion": "0.2.1"
 }

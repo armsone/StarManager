@@ -10,10 +10,11 @@ struct GeneratedPost: Identifiable, Codable, Equatable, Sendable {
     let caption: String
     let callToAction: String
     let hashtags: [String]
-    /// 실제 게시에 쓰는 완성 본문. 설정에서 고른 목표 글자 수를 넘지 않는 선에서 조립된다.
+    /// 실제 게시에 쓰는 완성 본문. 특정 게시할 곳이나 목표 글자 수를 강제하지 않고 자연스럽게 조립된다.
     let composedText: String
+    /// 예전 저장 데이터 호환용으로만 남아 있음. 지금의 작성 흐름은 이 값을 만들거나 참조하지 않는다.
     let targetCharacterCount: Int?
-    /// 생성 시점에 선택돼 있던 게시 기준 상한. 예전 데이터는 값이 없을 수 있다.
+    /// 예전 저장 데이터 호환용으로만 남아 있음. 지금의 작성 흐름은 이 값을 만들거나 참조하지 않는다.
     let destinationCharacterLimit: Int?
 
     init(
@@ -65,7 +66,7 @@ struct GeneratedPost: Identifiable, Codable, Equatable, Sendable {
     var formatReport: CaptionFormatReport {
         CaptionFormatReport.evaluate(
             composedText,
-            destinationLimit: destinationCharacterLimit ?? PostDestination.instagram.characterLimit
+            destinationLimit: destinationCharacterLimit ?? CaptionFormatReport.neutralSafetyCharacterLimit
         )
     }
 
@@ -89,6 +90,10 @@ struct GeneratedPost: Identifiable, Codable, Equatable, Sendable {
 /// 완성 본문이 선택한 게시 기준(플랫폼 글자 수 상한)을 지키는지 나타내는 재사용 가능한 검증 결과.
 /// 예전의 해시태그·마침표 줄바꿈·따옴표 금지 같은 숨은 형식 규칙은 더 이상 강제하지 않는다.
 struct CaptionFormatReport: Codable, Equatable, Sendable {
+    /// 특정 게시할 곳이나 목표 글자 수를 강제하지 않는 지금의 작성 흐름에서, 검증 타입이 구조적으로
+    /// 숫자를 요구할 때만 쓰는 넉넉한 안전 상한. 일반적인 글 길이에는 영향을 주지 않는다.
+    static let neutralSafetyCharacterLimit = 20_000
+
     let destinationLimit: Int
     let characterCount: Int
     let isWithinDestinationLimit: Bool

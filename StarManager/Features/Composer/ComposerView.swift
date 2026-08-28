@@ -10,6 +10,8 @@ import ImagePlayground
 
 struct ComposerView: View {
     private static let maxMediaItems = 8
+    /// 줄넘김 선택지는 열거형 선언 순서와 무관하게 항상 최소 · 적당히 · 자주 순서로 보여준다.
+    private static let lineBreakDisplayOrder: [LineBreakFrequency] = [.minimal, .moderate, .frequent]
 
     var resetRequest = UUID()
 
@@ -58,6 +60,8 @@ struct ComposerView: View {
     @State private var showsResetConfirmation = false
     @State private var resetScrollRequest = UUID()
     @State private var activeRepresentativePhoto: ExternalAIAttachment?
+    @State private var sparklesRotationAngle: Double = 0
+    @State private var isWritingSettingsExpanded = false
     @AppStorage("hasShownPastePermissionGuidance") private var hasShownPastePermissionGuidance = false
 
     var body: some View {
@@ -259,26 +263,22 @@ struct ComposerView: View {
     }
 
     private var creationColumn: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            heroCopy
+            mediaAndWritingCard
+            writingSettingsCard
+        }
+        .frame(maxWidth: 680, alignment: .leading)
+    }
+
+    private var mediaAndWritingCard: some View {
         let pickerTitle = "미디어"
-        let pickerIcon = mediaItems.isEmpty ? "photo.badge.plus" : "checkmark.circle.fill"
+        let pickerIcon = "photo.badge.plus"
 
         return VStack(alignment: .leading, spacing: 18) {
-            heroCopy
-
-            writingSettingsCard
-
             VStack(alignment: .leading, spacing: 10) {
                 BrandSectionTitle(title: "미디어", systemImage: "photo.on.rectangle.angled")
                     .font(.headline)
-
-                Text("미디어를 먼저 골라두면, 그에 어울리는 이야기를 적기 쉬워요. 미디어 없이 글부터 써도 괜찮아요.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-
-                Picker("게시 비율", selection: $previewAspect) {
-                    ForEach(PreviewAspect.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.segmented)
 
                 HStack(spacing: 10) {
                     PhotosPicker(
@@ -288,20 +288,28 @@ struct ComposerView: View {
                         matching: .any(of: [.images, .videos]),
                         photoLibrary: .shared()
                     ) {
-                        Label(pickerTitle, systemImage: pickerIcon)
-                            .frame(maxWidth: .infinity)
+                        HStack(spacing: 8) {
+                            Image(systemName: pickerIcon)
+                                .foregroundStyle(BrandTheme.accent)
+                            Text(pickerTitle)
+                                .foregroundStyle(.white)
+                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
+                    .buttonStyle(ComposerToolButtonStyle())
                     .disabled(isLoadingMedia || mediaItems.count >= Self.maxMediaItems)
                     .accessibilityHint("사진 보관함에서 게시 순서대로 최대 \(Self.maxMediaItems)개를 선택합니다")
 
                     Button(action: openCamera) {
-                        Label("카메라", systemImage: "camera.fill")
-                            .frame(maxWidth: .infinity)
+                        HStack(spacing: 8) {
+                            Image(systemName: "camera.fill")
+                                .foregroundStyle(BrandTheme.accent)
+                            Text("카메라")
+                                .foregroundStyle(.white)
+                        }
+                        .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.large)
+                    .buttonStyle(ComposerToolButtonStyle())
                     .disabled(isLoadingMedia || mediaItems.count >= Self.maxMediaItems)
                     .accessibilityHint("카메라로 여러 장을 연속 촬영해 미디어에 추가합니다")
                 }
@@ -326,6 +334,13 @@ struct ComposerView: View {
                 MediaPreview(items: mediaItems, aspect: previewAspect.ratio, isLoading: isLoadingMedia)
             }
 
+            if !mediaItems.isEmpty {
+                Picker("게시 비율", selection: $previewAspect) {
+                    ForEach(PreviewAspect.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+            }
+
             VStack(alignment: .leading, spacing: 8) {
                 if let source = activeCaptionSource {
                     Label(source.title, systemImage: source.symbolName)
@@ -348,7 +363,7 @@ struct ComposerView: View {
                         Label(validation.passesAllRules ? "기준 통과" : "확인 필요", systemImage: validation.passesAllRules ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                             .foregroundStyle(validation.passesAllRules ? .green : .orange)
                         Spacer()
-                        Text("\(trimmedIdea.count) / \(validation.format.destinationLimit)자").monospacedDigit()
+                        Text("\(trimmedIdea.count)자").monospacedDigit()
                     }
                     .font(.caption.weight(.semibold))
 
@@ -361,10 +376,12 @@ struct ComposerView: View {
                 }
             }
 
-            HStack(spacing: 7) {
-                Image(systemName: "paintpalette")
-                    .accessibilityHidden(true)
-                Text(composerSummaryText)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 7) {
+                    Image(systemName: "paintpalette")
+                        .accessibilityHidden(true)
+                    Text(composerSummaryText)
+                }
             }
             .font(.footnote)
             .foregroundStyle(.secondary)
@@ -373,12 +390,6 @@ struct ComposerView: View {
             if comparisonCandidates.count > 1 { candidateComparison }
 
             aiChoiceButtons
-
-            if hasRepresentativePhoto {
-                Text("대표 사진은 외부 AI 버튼을 누를 때만 함께 보내요.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
 
             if let message = errorMessage ?? statusMessage {
                 Label(message, systemImage: errorMessage == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
@@ -392,21 +403,13 @@ struct ComposerView: View {
                     Button { Task { await share() } } label: {
                         HStack {
                             if isPreparingShare { ProgressView().tint(.white) }
-                            Label(isPreparingShare ? "준비 중" : "\(profileStore.profile.destination.title)으로 →", systemImage: "paperplane.fill")
+                            Label(isPreparingShare ? "준비 중" : "공유하기 →", systemImage: "paperplane.fill")
                         }
                         .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(GlossyPrimaryButtonStyle())
                     .disabled(isPreparingShare || isGenerating)
                     .accessibilityHint("문구를 자동으로 복사하고 미디어 공유 화면을 엽니다")
-
-                    Label(
-                        shareMessage ?? "문구는 자동 복사됩니다",
-                        systemImage: shareMessageIsError ? "exclamationmark.triangle.fill" : "info.circle"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(shareMessageIsError ? .red : .secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }
@@ -431,9 +434,12 @@ struct ComposerView: View {
 
     private var heroCopy: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("오늘 어떤 이야기를 전할까요?")
+            Label("오늘 어떤 이야기를 전할까요?", systemImage: "sparkles")
                 .font(.system(.title2, design: .rounded, weight: .bold))
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? 3 : 2)
+                .symbolRenderingMode(.monochrome)
+                .foregroundStyle(theme.ink)
+                .tint(theme.accent)
 
             if theme.style == .bk {
                 RoundedRectangle(cornerRadius: 1.5)
@@ -445,36 +451,54 @@ struct ComposerView: View {
     }
 
     private var writingSettingsCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            BrandSectionTitle(title: "글쓰기 설정", systemImage: "slider.horizontal.3")
-                .font(.headline)
-
-            settingsRow(title: "게시할 곳", systemImage: "paperplane.circle.fill") {
-                Picker("게시할 곳", selection: $profileStore.profile.destination) {
-                    ForEach(PostDestination.allCases) { destination in
-                        Text(destination.title).tag(destination)
-                    }
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    isWritingSettingsExpanded.toggle()
                 }
-                .pickerStyle(.segmented)
-                .onChange(of: profileStore.profile.destination) { _, _ in
-                    profileStore.profile.clampCharacterCountToDestinationLimit()
+            } label: {
+                HStack(spacing: 8) {
+                    Label("글 스타일 설정", systemImage: "slider.horizontal.3")
+                        .font(.system(size: 15, weight: .semibold))
+                    Spacer()
+                    Image(systemName: isWritingSettingsExpanded ? "chevron.up" : "chevron.down")
+                        .font(.caption.weight(.bold))
                 }
-                Text(profileStore.profile.destination.limitBasisDescription)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                .foregroundStyle(theme.ink)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityValue(isWritingSettingsExpanded ? "펼쳐짐" : "접힘")
 
-            settingsRow(title: "글자 수", systemImage: "textformat.size") {
-                characterCountSlider
+            if isWritingSettingsExpanded {
+                Divider()
+                settingsRow(title: "글자 수", systemImage: "textformat.size") {
+                HStack(spacing: 8) {
+                    Text("\(profileStore.profile.controls.characterCount)자")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(theme.ink)
+                        .frame(width: 44, alignment: .leading)
+                    Slider(
+                        value: Binding(
+                            get: { Double(profileStore.profile.controls.characterCount) },
+                            set: { profileStore.profile.controls.characterCount = Int($0) }
+                        ),
+                        in: 50...500,
+                        step: 10
+                    )
+                    .accessibilityLabel("글자 수")
+                    .accessibilityValue("\(profileStore.profile.controls.characterCount)자")
+                }
             }
 
             settingsRow(title: "이모지 사용", systemImage: "face.smiling.fill") {
-                Picker("이모지 사용", selection: $profileStore.profile.emojiIntensity) {
-                    ForEach(EmojiIntensity.allCases) { item in
-                        Text(item.title).tag(item)
-                    }
-                }
-                .pickerStyle(.segmented)
+                CompactChoiceControl(
+                    items: EmojiIntensity.allCases,
+                    selection: $profileStore.profile.emojiIntensity,
+                    icon: \.compactIcon,
+                    shortLabel: \.compactLabel,
+                    accessibilityLabel: { "이모지 사용: \($0.title)" }
+                )
             }
 
             settingsRow(title: "분위기", systemImage: "cloud.sun.fill") {
@@ -487,12 +511,13 @@ struct ComposerView: View {
             }
 
             settingsRow(title: "스타일", systemImage: "text.book.closed.fill") {
-                Picker("스타일", selection: $profileStore.profile.style) {
-                    ForEach(PostStyle.allCases) { item in
-                        Text(item.title).tag(item)
-                    }
-                }
-                .pickerStyle(.segmented)
+                CompactChoiceControl(
+                    items: PostStyle.allCases,
+                    selection: $profileStore.profile.style,
+                    icon: \.compactIcon,
+                    shortLabel: \.title,
+                    accessibilityLabel: { "스타일: \($0.title)" }
+                )
             }
 
             settingsRow(title: "말투", systemImage: "quote.bubble.fill") {
@@ -511,14 +536,11 @@ struct ComposerView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                Text("나잇대는 프롬프트 힌트로만 쓰이고 다른 설정을 바꾸지 않아요.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
             }
 
             settingsRow(title: "줄넘김", systemImage: "arrow.turn.down.left") {
                 Picker("줄넘김", selection: $profileStore.profile.lineBreakFrequency) {
-                    ForEach(LineBreakFrequency.allCases) { item in
+                    ForEach(Self.lineBreakDisplayOrder) { item in
                         Text(item.title).tag(item)
                     }
                 }
@@ -530,29 +552,6 @@ struct ComposerView: View {
                     ForEach(PostLength.allCases) { Text($0.storyWeightTitle).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                Text(length.storyWeightExplanation)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
-            settingsRow(title: "주로 쓰는 주제", systemImage: "tag.fill") {
-                TextField("예: 카페 창업 일지", text: $profileStore.profile.accountTopic)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            settingsRow(title: "읽을 사람", systemImage: "person.2.fill") {
-                TextField("예: 오픈 예정 매장 팔로워", text: $profileStore.profile.audience)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            settingsRow(title: "금지 표현", systemImage: "nosign") {
-                TextField("쉼표로 구분해 적어 주세요", text: $profileStore.profile.prohibitedPhrases, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
-            }
-
-            settingsRow(title: "해시태그 취향", systemImage: "number") {
-                TextField("예: 핵심 키워드 중심", text: $profileStore.profile.hashtagStyle, axis: .vertical)
-                    .textFieldStyle(.roundedBorder)
             }
 
             settingsRow(title: "추가로 하고 싶은 설정", systemImage: "square.and.pencil") {
@@ -561,14 +560,24 @@ struct ComposerView: View {
                     text: $profileStore.profile.detailedGuidelines,
                     axis: .vertical
                 )
-                .lineLimit(3...8)
+                .font(.system(size: 13, weight: .regular))
+                .lineLimit(2...6)
                 .textFieldStyle(.plain)
-                .padding(10)
+                .padding(8)
                 .background(theme.canvas, in: RoundedRectangle(cornerRadius: 10))
             }
+            }
         }
-        .padding(14)
+        .controlSize(.small)
+        .padding(10)
         .background(theme.canvas, in: RoundedRectangle(cornerRadius: 14))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(theme.border, lineWidth: 1)
+        }
+        .onAppear {
+            isWritingSettingsExpanded = false
+        }
     }
 
     private func settingsRow<Content: View>(
@@ -576,39 +585,12 @@ struct ComposerView: View {
         systemImage: String,
         @ViewBuilder content: () -> Content
     ) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 3) {
             Label(title, systemImage: systemImage)
-                .font(.caption.weight(.semibold))
+                .font(.caption2.weight(.semibold))
                 .foregroundStyle(.secondary)
             content()
         }
-    }
-
-    private var characterCountSlider: some View {
-        let upperBound = Double(min(CreatorProfile.characterCountRange.upperBound, profileStore.profile.destination.characterLimit))
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text("\(profileStore.profile.controls.characterCount)자")
-                    .font(.subheadline.weight(.semibold))
-                    .monospacedDigit()
-                Spacer()
-                Text("\(CreatorProfile.characterCountRange.lowerBound)~\(Int(upperBound))자")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Slider(value: characterCountBinding, in: Double(CreatorProfile.characterCountRange.lowerBound)...upperBound, step: 10)
-        }
-    }
-
-    private var characterCountBinding: Binding<Double> {
-        Binding(
-            get: { Double(profileStore.profile.controls.characterCount) },
-            set: { newValue in
-                var controls = profileStore.profile.controls
-                controls.characterCount = Int(newValue)
-                profileStore.profile.controls = controls
-            }
-        )
     }
 
     private var aiChoiceButtons: some View {
@@ -647,9 +629,7 @@ struct ComposerView: View {
 
             if isGenerating {
                 HStack(spacing: 10) {
-                    ProgressView()
-                        .progressViewStyle(.circular)
-                        .tint(BrandTheme.accent)
+                    generatingStatusIcon
                     VStack(alignment: .leading, spacing: 2) {
                         Text(generatingStatusTitle)
                             .font(.subheadline.weight(.semibold))
@@ -699,6 +679,22 @@ struct ComposerView: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: isGenerating)
+    }
+
+    /// "게시물 준비 중" 같은 모호한 점 하나짜리 스피너 대신, AI가 작업 중임을 또렷하게 알리는 아이콘.
+    private var generatingStatusIcon: some View {
+        Image(systemName: "sparkles")
+            .font(.system(size: 23, weight: .semibold))
+            .foregroundStyle(BrandTheme.accent)
+            .frame(width: 28, height: 28)
+            .rotationEffect(.degrees(sparklesRotationAngle))
+            .accessibilityHidden(true)
+            .onAppear {
+                sparklesRotationAngle = 0
+                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                    sparklesRotationAngle = 360
+                }
+            }
     }
 
     private var generatingStatusTitle: String {
@@ -912,7 +908,7 @@ struct ComposerView: View {
 
     private var composerSummaryText: String {
         let profile = profileStore.profile
-        return "\(profile.destination.title) · \(mood.rawValue) · \(profile.style.title) · \(profile.tone.title) · 목표 \(profile.controls.characterCount)자"
+        return "\(mood.rawValue) · \(profile.style.title) · \(profile.tone.title) · \(profile.controls.characterCount)자"
     }
 
     private var currentDraftSignature: DraftSignature {
@@ -935,8 +931,8 @@ struct ComposerView: View {
     private var currentValidationContext: CaptionValidationContext {
         let profile = profileStore.profile
         return CaptionValidationContext(
-            destinationLimit: profile.destination.characterLimit,
-            prohibitedPhrases: profile.prohibitedPhrases,
+            destinationLimit: CaptionFormatReport.neutralSafetyCharacterLimit,
+            prohibitedPhrases: "",
             emojiIntensity: profile.emojiIntensity
         )
     }
@@ -954,9 +950,7 @@ struct ComposerView: View {
     private func isChoiceDisabled(_ choice: AIChoice) -> Bool {
         if isGenerating { return true }
         switch choice {
-        case .appleIntelligence:
-            return trimmedIdea.isEmpty
-        case .external:
+        case .appleIntelligence, .external:
             return trimmedIdea.isEmpty && !hasRepresentativePhoto
         }
     }
@@ -981,9 +975,8 @@ struct ComposerView: View {
             "대표 사진 한 장이 함께 첨부돼 있어. 사진을 실제로 살펴보고, 사진에 없는 내용은 지어내지 마.",
             "",
             "[원하는 결과]",
-            "사진 속 장면과 분위기를 바탕으로 \(profile.destination.title)에 올릴 한국어 글을 쓰고, 완성 문구만 출력해.",
-            "- 게시 기준: \(profile.destination.limitBasisDescription)",
-            "- 목표 분량: 공백과 줄바꿈 포함 \(profile.controls.characterCount)자를 넘지 않는 선에서 자연스럽게",
+            "사진 속 장면과 분위기를 바탕으로 올릴 한국어 글을 쓰고, 완성 문구만 출력해.",
+            "- 글자 수: \(profile.characterCountPromptInstruction)",
             "- 나잇대: \(profile.ageGroup.promptAudienceHint)",
             "- 분위기: \(mood.rawValue), \(length.promptInstruction)",
             "- 이모지 사용: \(profile.emojiIntensity.promptInstruction)",
@@ -991,10 +984,6 @@ struct ComposerView: View {
             "- 말투: \(profile.tone.promptInstruction)",
             "- 줄넘김: \(profile.lineBreakFrequency.promptInstruction)"
         ]
-        if !profile.accountTopic.isEmpty { lines.append("- 주로 쓰는 주제: \(profile.accountTopic)") }
-        if !profile.audience.isEmpty { lines.append("- 읽을 사람: \(profile.audience)") }
-        if !profile.prohibitedPhrases.isEmpty { lines.append("- 금지 표현: \(profile.prohibitedPhrases)") }
-        if !profile.hashtagStyle.isEmpty { lines.append("- 해시태그 취향: \(profile.hashtagStyle)") }
         let details = profile.detailedGuidelines.trimmingCharacters(in: .whitespacesAndNewlines)
         if !details.isEmpty { lines.append("- 추가로 하고 싶은 설정: \(details)") }
         return lines.joined(separator: "\n")
@@ -1009,9 +998,8 @@ struct ComposerView: View {
             trimmedIdea,
             "",
             "[원하는 결과]",
-            "사진과 위 내용을 함께 반영한 \(profile.destination.title)용 한국어 글을 쓰고, 완성 문구만 출력해.",
-            "- 게시 기준: \(profile.destination.limitBasisDescription)",
-            "- 목표 분량: 공백과 줄바꿈 포함 \(profile.controls.characterCount)자를 넘지 않는 선에서 자연스럽게",
+            "사진과 위 내용을 함께 반영한 한국어 글을 쓰고, 완성 문구만 출력해.",
+            "- 글자 수: \(profile.characterCountPromptInstruction)",
             "- 나잇대: \(profile.ageGroup.promptAudienceHint)",
             "- 분위기: \(mood.rawValue), \(length.promptInstruction)",
             "- 이모지 사용: \(profile.emojiIntensity.promptInstruction)",
@@ -1019,10 +1007,6 @@ struct ComposerView: View {
             "- 말투: \(profile.tone.promptInstruction)",
             "- 줄넘김: \(profile.lineBreakFrequency.promptInstruction)"
         ]
-        if !profile.accountTopic.isEmpty { lines.append("- 주로 쓰는 주제: \(profile.accountTopic)") }
-        if !profile.audience.isEmpty { lines.append("- 읽을 사람: \(profile.audience)") }
-        if !profile.prohibitedPhrases.isEmpty { lines.append("- 금지 표현: \(profile.prohibitedPhrases)") }
-        if !profile.hashtagStyle.isEmpty { lines.append("- 해시태그 취향: \(profile.hashtagStyle)") }
         let details = profile.detailedGuidelines.trimmingCharacters(in: .whitespacesAndNewlines)
         if !details.isEmpty { lines.append("- 추가로 하고 싶은 설정: \(details)") }
         return lines.joined(separator: "\n")
@@ -1065,9 +1049,7 @@ struct ComposerView: View {
             caption: lines.dropFirst().dropLast().joined(separator: "\n"),
             callToAction: lines.last ?? "",
             hashtags: hashtags,
-            composedText: text,
-            targetCharacterCount: signature.profile.controls.characterCount,
-            destinationCharacterLimit: signature.profile.destination.characterLimit
+            composedText: text
         )
         let candidate = CaptionCandidate(
             source: provider.captionSource,
@@ -1134,8 +1116,8 @@ struct ComposerView: View {
 
     private func validationContext(for signature: DraftSignature) -> CaptionValidationContext {
         CaptionValidationContext(
-            destinationLimit: signature.profile.destination.characterLimit,
-            prohibitedPhrases: signature.profile.prohibitedPhrases,
+            destinationLimit: CaptionFormatReport.neutralSafetyCharacterLimit,
+            prohibitedPhrases: "",
             emojiIntensity: signature.profile.emojiIntensity
         )
     }
@@ -1149,7 +1131,10 @@ struct ComposerView: View {
 
     @MainActor
     private func generateDraft() async {
-        guard !trimmedIdea.isEmpty else { return }
+        guard !trimmedIdea.isEmpty || hasRepresentativePhoto else {
+            errorMessage = "이야기를 입력하거나 대표 사진을 추가해 주세요."
+            return
+        }
         let requestID = UUID()
         generationID = requestID
         isGenerating = true
@@ -1586,6 +1571,59 @@ private enum PreviewAspect: String, CaseIterable, Identifiable {
     }
 }
 
+/// 짧은 아이콘+라벨 버튼을 한 줄에 나란히 배치하는 압축 선택 컨트롤.
+/// 세그먼트 컨트롤보다 시각 폭이 좁아, 큰 다이나믹 타입에서도 한 줄을 유지하기 쉽다.
+private struct CompactChoiceControl<Item: Identifiable & Hashable & CaseIterable>: View where Item.AllCases: RandomAccessCollection {
+    let items: Item.AllCases
+    @Binding var selection: Item
+    let icon: (Item) -> String
+    let shortLabel: (Item) -> String
+    let accessibilityLabel: (Item) -> String
+
+    init(
+        items: Item.AllCases,
+        selection: Binding<Item>,
+        icon: @escaping (Item) -> String,
+        shortLabel: @escaping (Item) -> String,
+        accessibilityLabel: @escaping (Item) -> String
+    ) {
+        self.items = items
+        self._selection = selection
+        self.icon = icon
+        self.shortLabel = shortLabel
+        self.accessibilityLabel = accessibilityLabel
+    }
+
+    var body: some View {
+        HStack(spacing: 5) {
+            ForEach(Array(items)) { item in
+                let isSelected = item == selection
+                Button {
+                    selection = item
+                } label: {
+                    VStack(spacing: 1) {
+                        Image(systemName: icon(item))
+                            .font(.system(size: 12, weight: .semibold))
+                        Text(shortLabel(item))
+                            .font(.system(size: 9, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.5)
+                    }
+                    .foregroundStyle(isSelected ? Color.white : Color.primary)
+                    .frame(maxWidth: .infinity, minHeight: 38)
+                    .background(
+                        isSelected ? AnyShapeStyle(BrandTheme.accent) : AnyShapeStyle(Color.secondary.opacity(0.14)),
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(accessibilityLabel(item))
+                .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+            }
+        }
+    }
+}
+
 private struct DraftSignature: Equatable {
     let idea: String
     let mood: PostMood
@@ -1642,6 +1680,24 @@ private extension ExternalAIProvider {
     }
 }
 
+/// 미디어·카메라 버튼 짝을 위한 차콜 표면 + 크롬 테두리 + 레드 아이콘 강조 스타일.
+private struct ComposerToolButtonStyle: ButtonStyle {
+    @Environment(\.brandTheme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(BrandTheme.carbon, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(theme.chrome.opacity(0.55), lineWidth: 1)
+            }
+            .opacity(isEnabled ? (configuration.isPressed ? 0.85 : 1) : 0.45)
+    }
+}
+
 private enum AIChoice: Identifiable, CaseIterable, Equatable {
     case appleIntelligence
     case external(ExternalAIProvider)
@@ -1662,7 +1718,7 @@ private enum AIChoice: Identifiable, CaseIterable, Equatable {
 
     var title: String {
         switch self {
-        case .appleIntelligence: "Apple Intelligence"
+        case .appleIntelligence: "AI"
         case let .external(provider): provider.title
         }
     }
