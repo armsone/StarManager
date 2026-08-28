@@ -14,6 +14,7 @@
 		100000000000000000000005 /* CaptionGenerating.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000005 /* CaptionGenerating.swift */; };
 		100000000000000000000006 /* ComposerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000006 /* ComposerView.swift */; };
 		10000000000000000000000D /* ExternalAIBrowserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000D /* ExternalAIBrowserView.swift */; };
+		10000000000000000000000E /* AIBIMediaPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000E /* AIBIMediaPipeline.swift */; };
 		100000000000000000000008 /* ProfileSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000008 /* ProfileSettingsView.swift */; };
 		100000000000000000000009 /* BrandTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000009 /* BrandTheme.swift */; };
 		10000000000000000000000A /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 20000000000000000000000A /* Assets.xcassets */; };
@@ -28,6 +29,7 @@
 		200000000000000000000005 /* CaptionGenerating.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptionGenerating.swift; sourceTree = "<group>"; };
 		200000000000000000000006 /* ComposerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerView.swift; sourceTree = "<group>"; };
 		20000000000000000000000D /* ExternalAIBrowserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalAIBrowserView.swift; sourceTree = "<group>"; };
+		20000000000000000000000E /* AIBIMediaPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AIBIMediaPipeline.swift; sourceTree = "<group>"; };
 		200000000000000000000008 /* ProfileSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSettingsView.swift; sourceTree = "<group>"; };
 		200000000000000000000009 /* BrandTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandTheme.swift; sourceTree = "<group>"; };
 		20000000000000000000000A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -115,6 +117,7 @@
 			isa = PBXGroup;
 			children = (
 				200000000000000000000006 /* ComposerView.swift */,
+				20000000000000000000000E /* AIBIMediaPipeline.swift */,
 				20000000000000000000000D /* ExternalAIBrowserView.swift */,
 			);
 			path = Composer;
@@ -205,6 +208,7 @@
 				100000000000000000000004 /* GeneratedPost.swift in Sources */,
 				100000000000000000000005 /* CaptionGenerating.swift in Sources */,
 				100000000000000000000006 /* ComposerView.swift in Sources */,
+				10000000000000000000000E /* AIBIMediaPipeline.swift in Sources */,
 				10000000000000000000000D /* ExternalAIBrowserView.swift in Sources */,
 				100000000000000000000008 /* ProfileSettingsView.swift in Sources */,
 				100000000000000000000009 /* BrandTheme.swift in Sources */,
@@ -222,7 +226,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202608282124;
+				CURRENT_PROJECT_VERSION = 202608290628;
 				DEVELOPMENT_TEAM = T7B4EPLHPK;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = StarManager;
@@ -234,7 +238,7 @@
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationPortrait;
-				MARKETING_VERSION = 2.3.0;
+				MARKETING_VERSION = 2.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.armsone.StarManager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -252,7 +256,7 @@
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202608282124;
+				CURRENT_PROJECT_VERSION = 202608290628;
 				DEVELOPMENT_TEAM = T7B4EPLHPK;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = StarManager;
@@ -264,7 +268,7 @@
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationPortrait;
-				MARKETING_VERSION = 2.3.0;
+				MARKETING_VERSION = 2.4.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.armsone.StarManager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";

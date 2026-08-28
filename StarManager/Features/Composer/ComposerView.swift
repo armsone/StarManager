@@ -59,7 +59,9 @@ struct ComposerView: View {
     @State private var showsCamera = false
     @State private var showsResetConfirmation = false
     @State private var resetScrollRequest = UUID()
-    @State private var activeRepresentativePhoto: ExternalAIAttachment?
+    @State private var activePhotoAttachments: [AIBIMediaAttachment] = []
+    @State private var externalAttachmentPreparationTask: Task<Void, Never>?
+    @State private var isPreparingExternalAttachments = false
     @State private var sparklesRotationAngle: Double = 0
     @State private var isWritingSettingsExpanded = false
     @AppStorage("hasShownPastePermissionGuidance") private var hasShownPastePermissionGuidance = false
@@ -108,11 +110,13 @@ struct ComposerView: View {
         .background(theme.canvasGradient)
         .background(KeyboardDismissTapInstaller())
         .background {
-            if let provider = activeExternalProvider, browserContext == nil {
+            if let provider = activeExternalProvider,
+               browserContext == nil,
+               !isPreparingExternalAttachments {
                 ExternalAIHiddenAutomatorView(
                     provider: provider,
                     prompt: externalPrompt,
-                    attachment: activeRepresentativePhoto,
+                    attachments: activePhotoAttachments,
                     generationID: generationID,
                     onSubmitted: { date in
                         externalSubmittedAt = date
@@ -131,7 +135,7 @@ struct ComposerView: View {
                         externalSubmittedAt = nil
                         elapsedSeconds = 0
                         isGenerating = false
-                        activeRepresentativePhoto = nil
+                        activePhotoAttachments = []
                     }
                 )
                 .id(generationID)
@@ -195,7 +199,7 @@ struct ComposerView: View {
             ExternalAIBrowserSheet(
                 provider: context.provider,
                 prompt: externalPrompt,
-                attachment: activeRepresentativePhoto,
+                attachments: activePhotoAttachments,
                 fallbackReason: context.fallbackReason,
                 onSubmitted: { date in
                     externalSubmittedAt = date
@@ -208,7 +212,7 @@ struct ComposerView: View {
                     elapsedSeconds = 0
                     isGenerating = false
                     activeExternalProvider = nil
-                    activeRepresentativePhoto = nil
+                    activePhotoAttachments = []
                 },
                 onImport: { text in
                     importAIResult(text, from: context.provider)
@@ -225,7 +229,7 @@ struct ComposerView: View {
                     if isGenerating {
                         isGenerating = false
                         activeExternalProvider = nil
-                        activeRepresentativePhoto = nil
+                        activePhotoAttachments = []
                     }
                     browserContext = nil
                 }
@@ -699,6 +703,9 @@ struct ComposerView: View {
 
     private var generatingStatusTitle: String {
         if let provider = activeExternalProvider {
+            if isPreparingExternalAttachments {
+                return "사진 \(mediaItems.filter { $0.kind == .image }.count)장 준비 중…"
+            }
             if let _ = externalSubmittedAt {
                 return "답변을 기다리는 중"
             }
@@ -709,6 +716,9 @@ struct ComposerView: View {
 
     private var generatingStatusSubtitle: String {
         if let _ = activeExternalProvider {
+            if isPreparingExternalAttachments {
+                return "원본은 그대로 두고 전송 크기로 최적화하고 있어요"
+            }
             if let _ = externalSubmittedAt {
                 return "남은 시간 \(Self.formatCountdown(Self.remainingExternalSeconds(elapsedSeconds)))"
             }
@@ -729,6 +739,8 @@ struct ComposerView: View {
 
     @MainActor
     private func cancelExternalGeneration() {
+        externalAttachmentPreparationTask?.cancel()
+        externalAttachmentPreparationTask = nil
         generationID = nil
         browserContext = nil
         activeExternalProvider = nil
@@ -736,19 +748,23 @@ struct ComposerView: View {
         externalSubmittedAt = nil
         elapsedSeconds = 0
         isGenerating = false
-        activeRepresentativePhoto = nil
+        activePhotoAttachments = []
+        isPreparingExternalAttachments = false
         statusMessage = "AI 요청을 취소했어요"
     }
 
     @MainActor
     private func timeoutExternalGeneration() {
+        externalAttachmentPreparationTask?.cancel()
+        externalAttachmentPreparationTask = nil
         generationID = nil
         browserContext = nil
         activeExternalProvider = nil
         externalSubmittedAt = nil
         elapsedSeconds = 0
         isGenerating = false
-        activeRepresentativePhoto = nil
+        activePhotoAttachments = []
+        isPreparingExternalAttachments = false
         errorMessage = "1분 59초 동안 답변이 없어서 중단했어요. 다시 시도해 주세요."
     }
 
@@ -766,7 +782,7 @@ struct ComposerView: View {
     @MainActor
     private func startExternalGeneration(for provider: ExternalAIProvider) {
         guard !trimmedIdea.isEmpty || hasRepresentativePhoto else {
-            errorMessage = "이야기를 입력하거나 대표 사진을 추가해 주세요."
+            errorMessage = "이야기를 입력하거나 사진을 추가해 주세요."
             return
         }
         let requestID = UUID()
@@ -783,9 +799,42 @@ struct ComposerView: View {
         generatedPost = nil
         generatedSignature = nil
         activeCaptionSource = nil
-        activeRepresentativePhoto = makeRepresentativePhotoAttachment()
-        if showsExternalAIBrowser {
-            browserContext = ExternalAIBrowserContext(provider: provider)
+        activePhotoAttachments = []
+
+        let sourceImages = mediaItems
+            .filter { $0.kind == .image }
+            .map(\.data)
+        guard !sourceImages.isEmpty else {
+            isPreparingExternalAttachments = false
+            if showsExternalAIBrowser {
+                browserContext = ExternalAIBrowserContext(provider: provider)
+            }
+            return
+        }
+
+        isPreparingExternalAttachments = true
+        statusMessage = "사진 \(sourceImages.count)장 준비 중…"
+        externalAttachmentPreparationTask?.cancel()
+        externalAttachmentPreparationTask = Task {
+            let prepared = await Task.detached(priority: .userInitiated) {
+                try? AIBIImageNormalizer.normalizeOrdered(sourceImages)
+            }.value
+            guard !Task.isCancelled, generationID == requestID else { return }
+            externalAttachmentPreparationTask = nil
+            isPreparingExternalAttachments = false
+            guard let prepared, prepared.count == sourceImages.count else {
+                errorMessage = "선택한 사진을 전송용으로 준비하지 못했어요. 사진을 확인하고 다시 시도해 주세요."
+                activeExternalProvider = nil
+                pendingExternalProvider = nil
+                isGenerating = false
+                activePhotoAttachments = []
+                return
+            }
+            activePhotoAttachments = prepared
+            statusMessage = "사진 \(prepared.count)장을 \(provider.title)에 연결하는 중…"
+            if showsExternalAIBrowser {
+                browserContext = ExternalAIBrowserContext(provider: provider)
+            }
         }
     }
 
@@ -958,7 +1007,7 @@ struct ComposerView: View {
     /// 사진만 있는지, 사진과 글이 함께 있는지, 글만 있는지에 따라 외부 AI에게 보낼 문구를 자동으로 고른다.
     private var externalPrompt: String {
         let profile = profileStore.profile
-        switch (activeRepresentativePhoto != nil, !trimmedIdea.isEmpty) {
+        switch (!activePhotoAttachments.isEmpty, !trimmedIdea.isEmpty) {
         case (true, true):
             return photoAndTextPrompt(profile: profile)
         case (true, false):
@@ -972,7 +1021,7 @@ struct ComposerView: View {
     private func photoOnlyPrompt(profile: CreatorProfile) -> String {
         var lines: [String] = [
             "[상황]",
-            "대표 사진 한 장이 함께 첨부돼 있어. 사진을 실제로 살펴보고, 사진에 없는 내용은 지어내지 마.",
+            "선택한 사진 \(activePhotoAttachments.count)장이 순서대로 첨부돼 있어. 사진을 모두 실제로 살펴보고, 사진에 없는 내용은 지어내지 마.",
             "",
             "[원하는 결과]",
             "사진 속 장면과 분위기를 바탕으로 올릴 한국어 글을 쓰고, 완성 문구만 출력해.",
@@ -992,7 +1041,7 @@ struct ComposerView: View {
     private func photoAndTextPrompt(profile: CreatorProfile) -> String {
         var lines: [String] = [
             "[상황]",
-            "대표 사진 한 장과 내가 적은 메모가 함께 있어. 사진을 실제로 살펴보고, 사진과 메모 둘 다에 어울리는 글을 써 줘. 사진에 없는 내용은 지어내지 마.",
+            "선택한 사진 \(activePhotoAttachments.count)장이 순서대로 첨부돼 있고 내가 적은 메모가 함께 있어. 사진을 모두 실제로 살펴보고, 사진과 메모 둘 다에 어울리는 글을 써 줘. 사진에 없는 내용은 지어내지 마.",
             "",
             "[내가 입력한 내용]",
             trimmedIdea,
@@ -1012,28 +1061,13 @@ struct ComposerView: View {
         return lines.joined(separator: "\n")
     }
 
-    /// 대표 사진(첫 번째 이미지, 영상 제외)을 방향 정보까지 반영해 그려낸 뒤 안전한 크기로 압축한다.
-    /// 전송 시점에 스냅샷해 이후 미디어 편집이 진행 중인 요청에 섞이지 않게 한다.
-    private func makeRepresentativePhotoAttachment() -> ExternalAIAttachment? {
-        guard let media = mediaItems.first(where: { $0.kind == .image }),
-              let image = UIImage(data: media.data),
-              image.size.width > 0, image.size.height > 0 else { return nil }
-        let maxDimension: CGFloat = 1600
-        let scale = min(1, maxDimension / max(image.size.width, image.size.height))
-        let targetSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: targetSize)
-        let normalized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetSize)) }
-        guard let jpeg = normalized.jpegData(compressionQuality: 0.82) else { return nil }
-        return ExternalAIAttachment(data: jpeg)
-    }
-
     @MainActor
     private func importAIResult(_ text: String, from provider: ExternalAIProvider) {
         guard !text.isEmpty else {
             errorMessage = "복사한 결과가 비어 있어요."
             activeExternalProvider = nil
             isGenerating = false
-            activeRepresentativePhoto = nil
+            activePhotoAttachments = []
             return
         }
         isIdeaFocused = false
@@ -1065,7 +1099,7 @@ struct ComposerView: View {
         elapsedSeconds = 0
         isGenerating = false
         errorMessage = nil
-        activeRepresentativePhoto = nil
+        activePhotoAttachments = []
         statusMessage = validationReport(for: candidate).passesAllRules ? "\(provider.title) 결과 가져옴" : "가져옴 · 기준 확인 필요"
     }
 
@@ -1110,7 +1144,10 @@ struct ComposerView: View {
         showsImagePlayground = false
         isGeneratingImage = false
         imageGenerationPostID = nil
-        activeRepresentativePhoto = nil
+        externalAttachmentPreparationTask?.cancel()
+        externalAttachmentPreparationTask = nil
+        activePhotoAttachments = []
+        isPreparingExternalAttachments = false
         resetScrollRequest = UUID()
     }
 
@@ -1132,7 +1169,7 @@ struct ComposerView: View {
     @MainActor
     private func generateDraft() async {
         guard !trimmedIdea.isEmpty || hasRepresentativePhoto else {
-            errorMessage = "이야기를 입력하거나 대표 사진을 추가해 주세요."
+            errorMessage = "이야기를 입력하거나 사진을 추가해 주세요."
             return
         }
         let requestID = UUID()

@@ -2,15 +2,19 @@
   "schemaVersion": 1,
   "repositories": {
     "starmanager-ios": {
-      "version": "0.2.1",
+      "version": "0.4.3",
       "files": {
+        "StarManager/Features/Composer/AIBIMediaPipeline.swift": {
+          "sha256": "8e9c934a73bd0a2bc06676e532cdd23dc0a320d96c9cdf922af813668c946dc7",
+          "source": "profiles/starmanager/distribution/ios/AIBIMediaPipeline.swift"
+        },
         "StarManager/Features/Composer/ExternalAIBrowserView.swift": {
-          "sha256": "3329a36c749000af58f96c6d3f44208a0154827c332167e14039264913ed1de3",
+          "sha256": "1741b365ae91fa1665ca6999f895d63ce63b5ec44b6faba29e8b45dca76bbb15",
           "source": "profiles/starmanager/distribution/ios/ExternalAIBrowserView.swift"
         }
       }
     }
   },
   "consumer": "starmanager",
-  "aibiVersion": "0.2.1"
+  "aibiVersion": "0.4.3"
 }
