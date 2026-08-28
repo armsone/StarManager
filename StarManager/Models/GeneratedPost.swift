@@ -10,9 +10,11 @@ struct GeneratedPost: Identifiable, Codable, Equatable, Sendable {
     let caption: String
     let callToAction: String
     let hashtags: [String]
-    /// 실제 게시에 쓰는 완성 본문. 공백/줄바꿈 포함 정확히 200자를 목표로 조립된다.
+    /// 실제 게시에 쓰는 완성 본문. 설정에서 고른 목표 글자 수를 넘지 않는 선에서 조립된다.
     let composedText: String
     let targetCharacterCount: Int?
+    /// 생성 시점에 선택돼 있던 게시 기준 상한. 예전 데이터는 값이 없을 수 있다.
+    let destinationCharacterLimit: Int?
 
     init(
         sourceIdea: String,
@@ -22,6 +24,7 @@ struct GeneratedPost: Identifiable, Codable, Equatable, Sendable {
         hashtags: [String],
         composedText: String? = nil,
         targetCharacterCount: Int = 200,
+        destinationCharacterLimit: Int? = nil,
         id: UUID = UUID(),
         createdAt: Date = Date()
     ) {
@@ -37,6 +40,7 @@ struct GeneratedPost: Identifiable, Codable, Equatable, Sendable {
             hashtags: hashtags
         )
         self.targetCharacterCount = targetCharacterCount
+        self.destinationCharacterLimit = destinationCharacterLimit
         self.id = id
         self.createdAt = createdAt
     }
@@ -57,9 +61,12 @@ struct GeneratedPost: Identifiable, Codable, Equatable, Sendable {
     /// 공백/줄바꿈 포함 Character 단위 글자 수.
     var characterCount: Int { composedText.count }
 
-    /// UI에서 200자 준수 여부와 필수 형식 규칙 통과 여부를 표시할 때 사용한다.
+    /// UI에서 선택한 게시 기준 글자 수 상한을 지키는지 표시할 때 사용한다.
     var formatReport: CaptionFormatReport {
-        CaptionFormatReport.evaluate(composedText, requiredCharacterCount: targetCharacterCount ?? 200)
+        CaptionFormatReport.evaluate(
+            composedText,
+            destinationLimit: destinationCharacterLimit ?? PostDestination.instagram.characterLimit
+        )
     }
 
     private static func assembleText(
@@ -79,95 +86,29 @@ struct GeneratedPost: Identifiable, Codable, Equatable, Sendable {
     }
 }
 
-/// 완성 본문이 저장된 작성 지침의 필수 형식 규칙을 지키는지 나타내는 재사용 가능한 검증 결과.
+/// 완성 본문이 선택한 게시 기준(플랫폼 글자 수 상한)을 지키는지 나타내는 재사용 가능한 검증 결과.
+/// 예전의 해시태그·마침표 줄바꿈·따옴표 금지 같은 숨은 형식 규칙은 더 이상 강제하지 않는다.
 struct CaptionFormatReport: Codable, Equatable, Sendable {
-    let requiredCharacterCount: Int
+    let destinationLimit: Int
     let characterCount: Int
-    let hasExactCharacterCount: Bool
-    let firstLineHasTwoKoreanHashtags: Bool
-    let periodsAlwaysEndLines: Bool
-    let hasNoFullTextQuotes: Bool
-    let emojiUsageIsRestrained: Bool
-    let lastLineIsEmojiWrappedSummary: Bool
+    let isWithinDestinationLimit: Bool
 
-    var passesAllRules: Bool {
-        hasExactCharacterCount
-            && firstLineHasTwoKoreanHashtags
-            && periodsAlwaysEndLines
-            && hasNoFullTextQuotes
-            && emojiUsageIsRestrained
-            && lastLineIsEmojiWrappedSummary
-    }
+    var passesAllRules: Bool { isWithinDestinationLimit }
 
     /// UI 배지/목록 표시에 쓰기 좋은, 실패한 규칙 설명 모음.
     var failedRuleDescriptions: [String] {
-        var failures: [String] = []
-        if !hasExactCharacterCount {
-            failures.append("공백 포함 \(requiredCharacterCount)자 (현재 \(characterCount)자)")
-        }
-        if !firstLineHasTwoKoreanHashtags { failures.append("첫 줄 한글 해시태그 2개 연속") }
-        if !periodsAlwaysEndLines { failures.append("마침표 뒤 줄바꿈") }
-        if !hasNoFullTextQuotes { failures.append("전체 따옴표 금지") }
-        if !emojiUsageIsRestrained { failures.append("이모지 절제 사용") }
-        if !lastLineIsEmojiWrappedSummary { failures.append("마지막 줄 이모지로 감싼 요약") }
-        return failures
+        isWithinDestinationLimit ? [] : ["게시 기준 \(destinationLimit)자 이내 (현재 \(characterCount)자)"]
     }
 
-    static func evaluate(_ text: String, requiredCharacterCount: Int = 200) -> CaptionFormatReport {
-        let lines = text.components(separatedBy: "\n")
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let wrappedInQuotes = ["\"", "“", "”"].contains { mark in
-            trimmed.count >= 2 && trimmed.hasPrefix(mark)
-                && ["\"", "“", "”"].contains(String(trimmed.suffix(1)))
-        }
-
-        return CaptionFormatReport(
-            requiredCharacterCount: requiredCharacterCount,
+    static func evaluate(_ text: String, destinationLimit: Int) -> CaptionFormatReport {
+        CaptionFormatReport(
+            destinationLimit: destinationLimit,
             characterCount: text.count,
-            hasExactCharacterCount: text.count == requiredCharacterCount,
-            firstLineHasTwoKoreanHashtags: firstLineHasHashtagPair(lines.first ?? ""),
-            periodsAlwaysEndLines: lines.allSatisfy { !$0.dropLast().contains(".") },
-            hasNoFullTextQuotes: !wrappedInQuotes,
-            emojiUsageIsRestrained: emojiIsRestrained(in: lines),
-            lastLineIsEmojiWrappedSummary: lastLineIsWrappedSummary(lines.last ?? "")
+            isWithinDestinationLimit: text.count <= destinationLimit
         )
     }
 
-    private static func firstLineHasHashtagPair(_ line: String) -> Bool {
-        let tokens = line.split(separator: " ")
-        guard tokens.count == 2 else { return false }
-        return tokens.allSatisfy { token in
-            token.count >= 2 && token.hasPrefix("#")
-                && token.dropFirst().allSatisfy(isHangul)
-        }
-    }
-
-    private static func lastLineIsWrappedSummary(_ line: String) -> Bool {
-        guard line.count >= 3, let first = line.first, let last = line.last else { return false }
-        let core = line.dropFirst().dropLast().trimmingCharacters(in: .whitespaces)
-        return isEmoji(first) && isEmoji(last) && !core.isEmpty
-    }
-
-    /// 첫 줄에는 이모지가 없어야 하고, 본문 줄은 문단 앞에만, 마지막 줄은 앞뒤 배치만 허용한다.
-    private static func emojiIsRestrained(in lines: [String]) -> Bool {
-        for (index, line) in lines.enumerated() {
-            let characters = Array(line)
-            for (position, character) in characters.enumerated() where isEmoji(character) {
-                if index == 0 { return false }
-                let isLastLine = index == lines.count - 1
-                let allowed = position == 0 || (isLastLine && position == characters.count - 1)
-                if !allowed { return false }
-            }
-        }
-        return true
-    }
-
-    private static func isHangul(_ character: Character) -> Bool {
-        character.unicodeScalars.allSatisfy { (0xAC00...0xD7A3).contains($0.value) }
-    }
-
-    fileprivate static func isEmoji(_ character: Character) -> Bool {
+    static func isEmoji(_ character: Character) -> Bool {
         character.unicodeScalars.contains {
             $0.properties.isEmojiPresentation || ($0.properties.isEmoji && $0.value >= 0x1F000)
         }
@@ -176,26 +117,23 @@ struct CaptionFormatReport: Codable, Equatable, Sendable {
 
 /// 외부 AI에서 돌아온 원문을 개인 설정까지 포함해 검사하기 위한 문맥.
 struct CaptionValidationContext: Equatable, Sendable {
-    let requiredCharacterCount: Int
+    let destinationLimit: Int
     let prohibitedPhrases: String
-    let allowsBodyEmoji: Bool
-    var minimumLineCount = 3
+    let emojiIntensity: EmojiIntensity
 }
 
-/// 기본 형식 검사에 금지 표현, 본문 이모지, 글자 수 표기와 최소 문단 검사를 더한 결과.
+/// 게시 기준 글자 수, 금지 표현, "이모지 안 씀" 준수, 글자 수 표기 금지만 검사하는 가벼운 결과.
 struct CaptionValidationReport: Equatable, Sendable {
     let format: CaptionFormatReport
     let prohibitedPhraseMatches: [String]
-    let respectsBodyEmojiPreference: Bool
+    let respectsEmojiNonePreference: Bool
     let hasNoCharacterCountLabel: Bool
-    let hasMinimumLineCount: Bool
 
     var passesAllRules: Bool {
         format.passesAllRules
             && prohibitedPhraseMatches.isEmpty
-            && respectsBodyEmojiPreference
+            && respectsEmojiNonePreference
             && hasNoCharacterCountLabel
-            && hasMinimumLineCount
     }
 
     var failedRuleDescriptions: [String] {
@@ -203,35 +141,26 @@ struct CaptionValidationReport: Equatable, Sendable {
         if !prohibitedPhraseMatches.isEmpty {
             failures.append("금지 표현 제외: \(prohibitedPhraseMatches.joined(separator: ", "))")
         }
-        if !respectsBodyEmojiPreference { failures.append("본문 이모지 설정 준수") }
+        if !respectsEmojiNonePreference { failures.append("이모지 안 씀 설정 준수") }
         if !hasNoCharacterCountLabel { failures.append("글자 수 표기 금지") }
-        if !hasMinimumLineCount { failures.append("태그·본문·요약 문단 구성") }
         return failures
     }
 
     static func evaluate(_ text: String, context: CaptionValidationContext) -> CaptionValidationReport {
-        let lines = text.components(separatedBy: "\n")
         let prohibited = context.prohibitedPhrases
             .components(separatedBy: CharacterSet(charactersIn: ",;\n"))
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         let matches = prohibited.filter { text.localizedCaseInsensitiveContains($0) }
-        let bodyLines = lines.dropFirst().dropLast()
-        let bodyContainsEmoji = bodyLines.joined(separator: "\n").contains { character in
-            CaptionFormatReport.isEmoji(character)
-        }
+        let containsEmoji = text.contains { CaptionFormatReport.isEmoji($0) }
         let countLabelPattern = #"글자\s*수|[0-9]+\s*자"#
         let hasCountLabel = text.range(of: countLabelPattern, options: .regularExpression) != nil
 
         return CaptionValidationReport(
-            format: CaptionFormatReport.evaluate(
-                text,
-                requiredCharacterCount: context.requiredCharacterCount
-            ),
+            format: CaptionFormatReport.evaluate(text, destinationLimit: context.destinationLimit),
             prohibitedPhraseMatches: matches,
-            respectsBodyEmojiPreference: context.allowsBodyEmoji || !bodyContainsEmoji,
-            hasNoCharacterCountLabel: !hasCountLabel,
-            hasMinimumLineCount: lines.count >= context.minimumLineCount
+            respectsEmojiNonePreference: context.emojiIntensity != .none || !containsEmoji,
+            hasNoCharacterCountLabel: !hasCountLabel
         )
     }
 }

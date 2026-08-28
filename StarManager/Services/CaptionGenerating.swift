@@ -80,9 +80,8 @@ struct DeviceIntelligenceCaptionGenerator: CaptionGenerating {
         if #available(iOS 26.0, *) {
             guard Self.availability == .available else { throw DeviceIntelligenceError.unavailable }
             let instructions = """
-            당신은 한국어 인스타그램 산문 전문 작가입니다.
+            당신은 한국어 게시물 작가입니다.
             결과에는 완성된 게시 문구만 출력합니다.
-            사용자의 모든 형식 조건과 금지 표현을 반드시 지킵니다.
             """
             let session = LanguageModelSession(instructions: instructions)
             let basePrompt = profile.generationPrompt(for: idea, mood: mood, length: length)
@@ -91,20 +90,20 @@ struct DeviceIntelligenceCaptionGenerator: CaptionGenerating {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             var report = CaptionFormatReport.evaluate(
                 response,
-                requiredCharacterCount: profile.controls.characterCount
+                destinationLimit: profile.destination.characterLimit
             )
 
             if !report.passesAllRules {
                 let repairPrompt = """
                 방금 결과를 아래 실패 항목만 고쳐서 완성 문구만 다시 출력하세요.
                 실패 항목: \(report.failedRuleDescriptions.joined(separator: ", "))
-                반드시 공백과 줄바꿈 포함 정확히 \(profile.controls.characterCount)자여야 합니다.
+                공백과 줄바꿈 포함 \(profile.destination.characterLimit)자를 넘지 않아야 합니다.
                 """
                 response = try await session.respond(to: repairPrompt).content
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 report = CaptionFormatReport.evaluate(
                     response,
-                    requiredCharacterCount: profile.controls.characterCount
+                    destinationLimit: profile.destination.characterLimit
                 )
             }
 
@@ -118,7 +117,8 @@ struct DeviceIntelligenceCaptionGenerator: CaptionGenerating {
                 callToAction: lines.last ?? "",
                 hashtags: hashtags,
                 composedText: response,
-                targetCharacterCount: profile.controls.characterCount
+                targetCharacterCount: profile.controls.characterCount,
+                destinationCharacterLimit: profile.destination.characterLimit
             )
         }
 #endif
@@ -330,7 +330,7 @@ struct BackendCaptionGenerator: CaptionGenerating {
         }
         let payload = try JSONDecoder().decode(BackendCaptionResponse.self, from: data)
         let text = payload.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let report = CaptionFormatReport.evaluate(text, requiredCharacterCount: profile.controls.characterCount)
+        let report = CaptionFormatReport.evaluate(text, destinationLimit: profile.destination.characterLimit)
         guard report.passesAllRules else { throw AIBackendError.invalidFormat(report.failedRuleDescriptions) }
 
         let lines = text.components(separatedBy: "\n")
@@ -342,7 +342,8 @@ struct BackendCaptionGenerator: CaptionGenerating {
             callToAction: lines.last ?? "",
             hashtags: hashtags,
             composedText: text,
-            targetCharacterCount: profile.controls.characterCount
+            targetCharacterCount: profile.controls.characterCount,
+            destinationCharacterLimit: profile.destination.characterLimit
         )
     }
 }
@@ -365,7 +366,7 @@ struct BackendImageGenerator: Sendable {
             sourceIdea: post.sourceIdea,
             postText: post.composedText,
             accountTopic: profile.accountTopic,
-            voice: profile.voice,
+            voice: "",
             aspectRatio: aspectRatio
         ))
 
@@ -403,6 +404,7 @@ private struct BackendImageRequest: Encodable {
     let sourceIdea: String
     let postText: String
     let accountTopic: String
+    /// 서버가 구조적으로 요구하는 필드라 남겨 두지만, 더 이상 개인 말투 값을 담지 않는다.
     let voice: String
     let aspectRatio: String
 }
@@ -535,9 +537,8 @@ struct DirectAICaptionGenerator: CaptionGenerating {
     var session: URLSession = .shared
 
     private static let instructions = """
-    당신은 한국어 인스타그램 산문 전문 작가입니다.
+    당신은 한국어 게시물 작가입니다.
     결과에는 완성된 게시 문구만 출력합니다.
-    사용자의 모든 형식 조건과 금지 표현을 반드시 지킵니다.
     """
 
     func generate(
@@ -552,9 +553,9 @@ struct DirectAICaptionGenerator: CaptionGenerating {
 
         var text = try await requestText(prompt: basePrompt)
         let validationContext = CaptionValidationContext(
-            requiredCharacterCount: profile.controls.characterCount,
+            destinationLimit: profile.destination.characterLimit,
             prohibitedPhrases: profile.prohibitedPhrases,
-            allowsBodyEmoji: profile.usesEmoji
+            emojiIntensity: profile.emojiIntensity
         )
         var report = CaptionValidationReport.evaluate(text, context: validationContext)
 
@@ -562,7 +563,7 @@ struct DirectAICaptionGenerator: CaptionGenerating {
             let repairPrompt = """
             아래 이전 결과를 실패 항목에 맞춰 고친 뒤 완성 문구만 다시 출력하세요.
             실패 항목: \(report.failedRuleDescriptions.joined(separator: ", "))
-            반드시 공백과 줄바꿈 포함 정확히 \(profile.controls.characterCount)자여야 합니다.
+            공백과 줄바꿈 포함 \(profile.destination.characterLimit)자를 넘지 않아야 합니다.
 
             이전 결과:
             \(text)
@@ -582,7 +583,8 @@ struct DirectAICaptionGenerator: CaptionGenerating {
             callToAction: lines.last ?? "",
             hashtags: hashtags,
             composedText: text,
-            targetCharacterCount: profile.controls.characterCount
+            targetCharacterCount: profile.controls.characterCount,
+            destinationCharacterLimit: profile.destination.characterLimit
         )
     }
 
@@ -718,9 +720,8 @@ struct DirectAICaptionGenerator: CaptionGenerating {
 }
 
 /// 오프라인 데모용 로컬 생성기.
-/// 저장된 작성 지침의 필수 형식(공백 포함 정확히 200자, 첫 줄 한글 태그 2개 연속,
-/// 마침표 뒤 줄바꿈, 전체 따옴표 금지, 절제된 문단 앞 이모지,
-/// 이모지로 감싼 요약 마지막 줄)을 결정적으로 재현한다.
+/// 선택한 게시 기준 글자 수 상한을 넘지 않는 선에서, 분위기·이모지 강도·원문 반영 정도에
+/// 맞춰 문장을 결정적으로 조립한다. 특정 개인의 말투나 고정 해시태그 형식을 강제하지 않는다.
 struct PreviewCaptionGenerator: CaptionGenerating {
     var simulatedDelay: Duration = .milliseconds(550)
 
@@ -733,94 +734,71 @@ struct PreviewCaptionGenerator: CaptionGenerating {
         if simulatedDelay > .zero { try await Task.sleep(for: simulatedDelay) }
 
         let cleanIdea = Self.sanitize(idea)
-        let controls = profile.controls
-        var seed = Self.seed(from: cleanIdea + mood.rawValue + length.rawValue + String(describing: controls))
-
-        let tags = Self.hashtagPair(from: cleanIdea, mood: mood, seed: &seed)
-        let firstLine = "#\(tags.0) #\(tags.1)"
-        let lastLine = Self.summaryLine(for: mood, targetCount: controls.characterCount)
-
-        if controls.characterCount < 100 {
-            let bodyLength = max(1, controls.characterCount - firstLine.count - lastLine.count - 2)
-            let body = Self.compactBody(
-                exactLength: bodyLength,
-                idea: cleanIdea,
-                mood: mood,
-                length: length,
-                emoji: profile.usesEmoji
-            )
-            let composedText = [firstLine, body, lastLine].joined(separator: "\n")
-            return GeneratedPost(
-                sourceIdea: cleanIdea,
-                hook: body,
-                caption: "",
-                callToAction: lastLine,
-                hashtags: [tags.0, tags.1],
-                composedText: composedText,
-                targetCharacterCount: controls.characterCount
-            )
+        var seed = Self.seed(from: cleanIdea + mood.rawValue + length.rawValue + profile.emojiIntensity.rawValue)
+        let limit = max(20, min(profile.controls.characterCount, profile.destination.characterLimit))
+        let symbol = Self.paragraphEmoji(for: mood)
+        let (leadEmoji, bodyEmoji, summaryEmoji): (String?, String, String) = switch profile.emojiIntensity {
+        case .none: (nil, "", "")
+        case .low: (nil, "", symbol)
+        case .high: (symbol, "", symbol)
+        case .heavy: (symbol, symbol, symbol)
         }
 
-        let maximumLeadLength = max(
-            4,
-            controls.characterCount - firstLine.count - lastLine.count - 4
-        )
-        let leadLine = Self.leadLine(
-            idea: cleanIdea,
-            mood: mood,
-            cap: min(Self.leadCap(for: length), maximumLeadLength),
-            emoji: profile.usesEmoji ? Self.paragraphEmoji(for: mood) : nil
-        )
+        let leadRatio: Double = switch length {
+        case .short: 0.35
+        case .medium: 0.6
+        case .long: 0.85
+        }
+        let leadCap = min(max(8, Int(Double(limit) * leadRatio)), limit - 1)
+        let leadLine = Self.leadLine(idea: cleanIdea, mood: mood, cap: leadCap, emoji: leadEmoji)
 
-        // 전체 200자 = 각 줄 글자 수 합 + 줄바꿈 수(줄 수 - 1).
-        // 고정 줄을 뺀 나머지 예산을 본문 문장으로 채우고,
-        // 마지막 남은 글자 수는 가변 길이 문장으로 정확히 메운다.
-        var remaining = controls.characterCount
-            - firstLine.count
-            - (1 + leadLine.count)
-            - (1 + lastLine.count)
+        var lines = [leadLine]
+        var used = leadLine.count
 
-        var bodyLines = [leadLine]
         let banned = Self.bannedPhrases(in: profile.prohibitedPhrases)
-        let bank = Self.toneSentenceBank(for: controls) + Self.rotated(Self.sentenceBank(for: mood), seed: &seed)
+        let bank = Self.rotated(Self.sentenceBank(for: mood), seed: &seed)
             .filter { sentence in !banned.contains { sentence.contains($0) } }
 
         for sentence in bank {
-            let cost = 1 + sentence.count
-            // 가변 문장 최소 비용(줄바꿈 1 + 글자 3)을 항상 남겨 둔다.
-            if remaining - cost >= 4 {
-                bodyLines.append(sentence)
-                remaining -= cost
+            let candidate = bodyEmoji.isEmpty ? sentence : "\(bodyEmoji) \(sentence)"
+            let cost = 1 + candidate.count
+            guard used + cost <= limit else { continue }
+            lines.append(candidate)
+            used += cost
+        }
+
+        if !summaryEmoji.isEmpty {
+            let summary = "\(summaryEmoji) \(Self.summaryClause(for: mood)) \(summaryEmoji)"
+            if used + 1 + summary.count <= limit {
+                lines.append(summary)
+                used += 1 + summary.count
             }
         }
-        bodyLines.append(Self.flexSentence(exactLength: remaining - 1, seed: &seed))
 
-        let composedText = ([firstLine] + bodyLines + [lastLine]).joined(separator: "\n")
+        var composedText = lines.joined(separator: "\n")
+        if composedText.count > limit {
+            composedText = String(composedText.prefix(limit))
+        }
 
         return GeneratedPost(
             sourceIdea: cleanIdea,
             hook: leadLine,
-            caption: bodyLines.dropFirst().joined(separator: "\n"),
-            callToAction: lastLine,
-            hashtags: [tags.0, tags.1],
+            caption: lines.dropFirst().joined(separator: "\n"),
+            callToAction: lines.last ?? "",
+            hashtags: [],
             composedText: composedText,
-            targetCharacterCount: controls.characterCount
+            targetCharacterCount: profile.controls.characterCount,
+            destinationCharacterLimit: profile.destination.characterLimit
         )
     }
 
     // MARK: - 입력 정리
 
-    /// 형식 규칙과 충돌하는 문자(따옴표, 해시, 이모지, 문장 중간 마침표)를 제거한다.
     private static func sanitize(_ raw: String) -> String {
-        let mapped = raw.map { character -> String in
-            if isEmoji(character) || "\"“”#".contains(character) { return "" }
-            if ".!?…".contains(character) { return " " }
-            return String(character)
-        }
-        return mapped.joined()
-            .split(whereSeparator: \.isWhitespace)
+        raw
+            .split(whereSeparator: \.isNewline)
             .joined(separator: " ")
-            .precomposedStringWithCanonicalMapping
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func bannedPhrases(in raw: String) -> [String] {
@@ -831,23 +809,14 @@ struct PreviewCaptionGenerator: CaptionGenerating {
 
     // MARK: - 줄 구성
 
-    private static func leadCap(for length: PostLength) -> Int {
-        switch length {
-        case .short: 45
-        case .medium: 65
-        case .long: 90
-        }
-    }
-
     private static func leadLine(idea: String, mood: PostMood, cap: Int, emoji: String?) -> String {
-        let prefix = emoji ?? ""
+        let prefix = emoji.map { "\($0) " } ?? ""
         let clause = idea.isEmpty ? defaultLead(for: mood) : idea
-        let bodyCap = cap - prefix.count - 1
+        let bodyCap = max(1, cap - prefix.count - 1)
 
         if clause.count <= bodyCap {
             return prefix + clause + "."
         }
-        // 해시태그·이모지·요약을 건드리지 않도록 아이디어 문장만 단어 경계에서 줄인다.
         var cut = String(clause.prefix(bodyCap))
         if let lastSpace = cut.lastIndex(of: " "),
            cut.distance(from: cut.startIndex, to: lastSpace) > bodyCap / 2 {
@@ -856,50 +825,12 @@ struct PreviewCaptionGenerator: CaptionGenerating {
         return prefix + cut.trimmingCharacters(in: .whitespaces) + "…"
     }
 
-    private static func summaryLine(for mood: PostMood, targetCount: Int) -> String {
-        if targetCount < 100 {
-            return switch mood {
-            case .warm: "🧡 오늘을 남긴다 🧡"
-            case .witty: "😎 오늘도 해냈다 😎"
-            case .calm: "🌙 오늘을 담는다 🌙"
-            }
+    private static func summaryClause(for mood: PostMood) -> String {
+        switch mood {
+        case .warm: "온기를 담아 오늘을 남긴다"
+        case .witty: "얼렁뚱땅 그래도 완벽한 하루"
+        case .calm: "고요하게 채운 하루의 기록"
         }
-        let (emoji, clause) = switch mood {
-        case .warm: ("🧡", "온기를 담아 오늘을 남긴다")
-        case .witty: ("😎", "얼렁뚱땅 그래도 완벽한 하루")
-        case .calm: ("🌙", "고요하게 채운 하루의 기록")
-        }
-        return "\(emoji) \(clause) \(emoji)"
-    }
-
-    private static func compactBody(
-        exactLength target: Int,
-        idea: String,
-        mood: PostMood,
-        length: PostLength,
-        emoji: Bool
-    ) -> String {
-        guard target > 0 else { return "" }
-        let prefix = emoji ? paragraphEmoji(for: mood) : ""
-        let ratio: Double = switch length {
-        case .short: 0.35
-        case .medium: 0.6
-        case .long: 0.85
-        }
-        let available = max(0, target - prefix.count - 1)
-        let sourceCount = min(idea.count, max(1, Int(Double(available) * ratio)))
-        var body = prefix + String(idea.prefix(sourceCount)).trimmingCharacters(in: .whitespaces)
-
-        if body.count >= target {
-            return String(body.prefix(max(0, target - 1))) + "."
-        }
-
-        var seed = seed(from: idea + mood.rawValue + length.rawValue)
-        let remaining = target - body.count
-        if remaining == 1 { return body + "…" }
-        body += " " + flexSentence(exactLength: remaining - 1, seed: &seed)
-        if body.count < target { body += String(repeating: "음", count: target - body.count) }
-        return String(body.prefix(target))
     }
 
     private static func paragraphEmoji(for mood: PostMood) -> String {
@@ -956,76 +887,6 @@ struct PreviewCaptionGenerator: CaptionGenerating {
         }
     }
 
-    private static func toneSentenceBank(for controls: GenerationControls) -> [String] {
-        let groups: [(Int, [String])] = [
-            (controls.emotion, ["마음의 잔향이 오래 머문다.", "무심한 장면이 가슴을 건드린다."]),
-            (controls.kindness, ["다정한 시선 하나를 조용히 건넨다.", "서두르지 않아도 괜찮다고 말해 본다."]),
-            (controls.originality, ["익숙한 풍경의 이면이 낯설게 반짝인다.", "평범함의 모서리에서 새 장면을 줍는다."]),
-            (controls.masculinity, ["결심한 방향으로 묵묵히 걸어간다.", "말보다 단단한 걸음으로 답한다."]),
-            (controls.chic, ["설명은 줄이고 여운만 남긴다.", "담백하게 선을 긋고 다음으로 간다."])
-        ]
-        return groups.sorted { $0.0 > $1.0 }.flatMap(\.1)
-    }
-
-    // MARK: - 해시태그
-
-    private static func hashtagPair(
-        from idea: String,
-        mood: PostMood,
-        seed: inout UInt64
-    ) -> (String, String) {
-        var candidates: [String] = []
-        for word in idea.split(separator: " ") {
-            let hangul = String(word.filter(isHangulSyllable).prefix(6))
-            if hangul.count >= 2, !candidates.contains(hangul) {
-                candidates.append(hangul)
-            }
-        }
-
-        let fallback: [String] = switch mood {
-        case .warm: ["온기기록", "마음한켠", "따뜻한하루"]
-        case .witty: ["일상반전", "오늘의수확", "얼렁뚱땅"]
-        case .calm: ["담백일기", "고요한하루", "느린기록"]
-        }
-        var pool = rotated(fallback, seed: &seed)
-        while candidates.count < 2 {
-            let next = pool.removeFirst()
-            if !candidates.contains(next) { candidates.append(next) }
-        }
-        return (candidates[0], candidates[1])
-    }
-
-    // MARK: - 200자 맞춤 채움
-
-    /// 마침표를 포함해 정확히 target 글자인 혼잣말 문장을 합성한다.
-    /// 부사(길이 2~4, 공백 포함 비용 3~5)를 쌓다가 길이 2~6의 마무리 어절로 닫는다.
-    private static func flexSentence(exactLength target: Int, seed: inout UInt64) -> String {
-        switch target {
-        case ..<1: return ""
-        case 1: return "…"
-        case 2: return "늘."
-        default: break
-        }
-
-        let connectors: [[String]] = [
-            ["문득", "괜히", "다시", "조금", "슬쩍"],
-            ["천천히", "가만히", "고요히", "기꺼이", "나직이"],
-            ["새삼스레", "다정하게", "무던하게", "은근하게"]
-        ]
-        let enders = ["오늘", "이대로", "잔잔하게", "고즈넉하게", "사부작사부작"]
-
-        var remaining = target
-        var words: [String] = []
-        while remaining > 7 {
-            let cost = 3 + Int(nextRandom(&seed) % 3)
-            let pool = connectors[cost - 3]
-            words.append(pool[Int(nextRandom(&seed) % UInt64(pool.count))])
-            remaining -= cost
-        }
-        words.append(enders[remaining - 3])
-        return words.joined(separator: " ") + "."
-    }
-
     // MARK: - 결정적 난수
 
     /// 같은 아이디어·설정이면 항상 같은 결과가 나오도록 FNV-1a 기반 시드를 쓴다.
@@ -1049,15 +910,4 @@ struct PreviewCaptionGenerator: CaptionGenerating {
         return Array(items[offset...] + items[..<offset])
     }
 
-    // MARK: - 문자 판별
-
-    private static func isHangulSyllable(_ character: Character) -> Bool {
-        character.unicodeScalars.allSatisfy { (0xAC00...0xD7A3).contains($0.value) }
-    }
-
-    private static func isEmoji(_ character: Character) -> Bool {
-        character.unicodeScalars.contains {
-            $0.properties.isEmojiPresentation || ($0.properties.isEmoji && $0.value >= 0x1F000)
-        }
-    }
 }

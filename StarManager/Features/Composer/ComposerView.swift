@@ -57,6 +57,7 @@ struct ComposerView: View {
     @State private var showsCamera = false
     @State private var showsResetConfirmation = false
     @State private var resetScrollRequest = UUID()
+    @State private var activeRepresentativePhoto: ExternalAIAttachment?
     @AppStorage("hasShownPastePermissionGuidance") private var hasShownPastePermissionGuidance = false
 
     var body: some View {
@@ -64,19 +65,8 @@ struct ComposerView: View {
             ScrollView {
                 Color.clear.frame(height: 0).id("composer-top")
                 Group {
-                    if horizontalSizeClass == .regular {
-                        HStack(alignment: .top, spacing: 20) {
-                            creationColumn
-                            previewColumn
-                        }
-                        .frame(maxWidth: 1120)
-                    } else {
-                        VStack(spacing: 16) {
-                            creationColumn
-                            previewColumn
-                        }
-                        .frame(maxWidth: 680)
-                    }
+                    creationColumn
+                        .frame(maxWidth: horizontalSizeClass == .regular ? 720 : 680)
                 }
                 .padding(.horizontal, horizontalSizeClass == .regular ? 24 : 16)
                 .padding(.vertical, horizontalSizeClass == .regular ? 20 : 12)
@@ -118,6 +108,7 @@ struct ComposerView: View {
                 ExternalAIHiddenAutomatorView(
                     provider: provider,
                     prompt: externalPrompt,
+                    attachment: activeRepresentativePhoto,
                     generationID: generationID,
                     onSubmitted: { date in
                         externalSubmittedAt = date
@@ -136,6 +127,7 @@ struct ComposerView: View {
                         externalSubmittedAt = nil
                         elapsedSeconds = 0
                         isGenerating = false
+                        activeRepresentativePhoto = nil
                     }
                 )
                 .id(generationID)
@@ -145,9 +137,17 @@ struct ComposerView: View {
                 .accessibilityHidden(true)
             }
         }
-        .navigationTitle("스타메니저")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .principal) {
+                HStack(spacing: 6) {
+                    appIconThumbnail
+                    Text("스타메니저")
+                        .font(.headline)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("스타메니저")
+            }
             ToolbarItem(placement: .cancellationAction) {
                 Button("취소") {
                     if hasComposerContent {
@@ -191,6 +191,7 @@ struct ComposerView: View {
             ExternalAIBrowserSheet(
                 provider: context.provider,
                 prompt: externalPrompt,
+                attachment: activeRepresentativePhoto,
                 fallbackReason: context.fallbackReason,
                 onSubmitted: { date in
                     externalSubmittedAt = date
@@ -203,6 +204,7 @@ struct ComposerView: View {
                     elapsedSeconds = 0
                     isGenerating = false
                     activeExternalProvider = nil
+                    activeRepresentativePhoto = nil
                 },
                 onImport: { text in
                     importAIResult(text, from: context.provider)
@@ -219,6 +221,7 @@ struct ComposerView: View {
                     if isGenerating {
                         isGenerating = false
                         activeExternalProvider = nil
+                        activeRepresentativePhoto = nil
                     }
                     browserContext = nil
                 }
@@ -235,10 +238,9 @@ struct ComposerView: View {
             )
             .ignoresSafeArea()
         }
-        .confirmationDialog(
+        .alert(
             "새 이야기로 시작할까요?",
-            isPresented: $showsResetConfirmation,
-            titleVisibility: .visible
+            isPresented: $showsResetConfirmation
         ) {
             Button("새로 시작", role: .destructive) { resetComposer() }
             Button("취소", role: .cancel) {}
@@ -263,77 +265,119 @@ struct ComposerView: View {
         return VStack(alignment: .leading, spacing: 18) {
             heroCopy
 
-            TextField("한 줄로 적어 주세요", text: $idea, axis: .vertical)
-                .lineLimit(2...5)
-                .textFieldStyle(.plain)
-                .padding(14)
-                .background(theme.canvas, in: RoundedRectangle(cornerRadius: 14))
-                .disabled(isGenerating)
-                .focused($isIdeaFocused)
-                .accessibilityHint("게시물의 바탕이 될 짧은 이야기를 입력합니다")
+            writingSettingsCard
+
+            VStack(alignment: .leading, spacing: 10) {
+                BrandSectionTitle(title: "미디어", systemImage: "photo.on.rectangle.angled")
+                    .font(.headline)
+
+                Text("미디어를 먼저 골라두면, 그에 어울리는 이야기를 적기 쉬워요. 미디어 없이 글부터 써도 괜찮아요.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Picker("게시 비율", selection: $previewAspect) {
+                    ForEach(PreviewAspect.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+
+                HStack(spacing: 10) {
+                    PhotosPicker(
+                        selection: $selectedItems,
+                        maxSelectionCount: max(1, Self.maxMediaItems - mediaItems.count),
+                        selectionBehavior: .ordered,
+                        matching: .any(of: [.images, .videos]),
+                        photoLibrary: .shared()
+                    ) {
+                        Label(pickerTitle, systemImage: pickerIcon)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(isLoadingMedia || mediaItems.count >= Self.maxMediaItems)
+                    .accessibilityHint("사진 보관함에서 게시 순서대로 최대 \(Self.maxMediaItems)개를 선택합니다")
+
+                    Button(action: openCamera) {
+                        Label("카메라", systemImage: "camera.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(isLoadingMedia || mediaItems.count >= Self.maxMediaItems)
+                    .accessibilityHint("카메라로 여러 장을 연속 촬영해 미디어에 추가합니다")
+                }
+
+                if !mediaItems.isEmpty { mediaOrderEditor }
+            }
+            .contentShape(Rectangle())
+            .onDrop(
+                of: [UTType.image.identifier, UTType.movie.identifier],
+                isTargeted: $isMediaDropTargeted,
+                perform: receiveDroppedMedia
+            )
+            .overlay {
+                if isMediaDropTargeted {
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(BrandTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
+                        .allowsHitTesting(false)
+                }
+            }
+
+            if !mediaItems.isEmpty || isLoadingMedia {
+                MediaPreview(items: mediaItems, aspect: previewAspect.ratio, isLoading: isLoadingMedia)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                if let source = activeCaptionSource {
+                    Label(source.title, systemImage: source.symbolName)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+
+                TextField("이야기를 적어 주세요 · AI 결과도 여기에 채워져요", text: $idea, axis: .vertical)
+                    .lineLimit(3...20)
+                    .textFieldStyle(.plain)
+                    .padding(14)
+                    .background(theme.canvas, in: RoundedRectangle(cornerRadius: 14))
+                    .disabled(isGenerating)
+                    .focused($isIdeaFocused)
+                    .textSelection(.enabled)
+                    .accessibilityHint("게시물의 바탕이 될 이야기를 입력하거나 AI가 만든 글을 다듬습니다")
+
+                if let validation = liveValidationReport {
+                    HStack {
+                        Label(validation.passesAllRules ? "기준 통과" : "확인 필요", systemImage: validation.passesAllRules ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(validation.passesAllRules ? .green : .orange)
+                        Spacer()
+                        Text("\(trimmedIdea.count) / \(validation.format.destinationLimit)자").monospacedDigit()
+                    }
+                    .font(.caption.weight(.semibold))
+
+                    if !validation.passesAllRules {
+                        Text(validation.failedRuleDescriptions.joined(separator: " · "))
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .lineSpacing(2)
+                    }
+                }
+            }
 
             HStack(spacing: 7) {
                 Image(systemName: "paintpalette")
                     .accessibilityHidden(true)
-                Text("\(mood.rawValue) · 이야기 비중 \(length.storyWeightTitle) · \(profileStore.profile.controls.characterCount)자 — 나의 취향 탭에서 조절")
+                Text(composerSummaryText)
             }
             .font(.footnote)
             .foregroundStyle(.secondary)
             .accessibilityElement(children: .combine)
 
+            if comparisonCandidates.count > 1 { candidateComparison }
+
             aiChoiceButtons
 
-            if generatedPost != nil {
-                VStack(alignment: .leading, spacing: 10) {
-                    BrandSectionTitle(title: "미디어", systemImage: "photo.on.rectangle.angled")
-                        .font(.headline)
-
-                    Picker("게시 비율", selection: $previewAspect) {
-                        ForEach(PreviewAspect.allCases) { Text($0.title).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-
-                    HStack(spacing: 10) {
-                        PhotosPicker(
-                            selection: $selectedItems,
-                            maxSelectionCount: max(1, Self.maxMediaItems - mediaItems.count),
-                            selectionBehavior: .ordered,
-                            matching: .any(of: [.images, .videos]),
-                            photoLibrary: .shared()
-                        ) {
-                            Label(pickerTitle, systemImage: pickerIcon)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
-                        .disabled(isLoadingMedia || mediaItems.count >= Self.maxMediaItems)
-                        .accessibilityHint("사진 보관함에서 게시 순서대로 최대 \(Self.maxMediaItems)개를 선택합니다")
-
-                        Button(action: openCamera) {
-                            Label("카메라", systemImage: "camera.fill")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.large)
-                        .disabled(isLoadingMedia || mediaItems.count >= Self.maxMediaItems)
-                        .accessibilityHint("카메라로 여러 장을 연속 촬영해 미디어에 추가합니다")
-                    }
-
-                    if !mediaItems.isEmpty { mediaOrderEditor }
-                }
-                .contentShape(Rectangle())
-                .onDrop(
-                    of: [UTType.image.identifier, UTType.movie.identifier],
-                    isTargeted: $isMediaDropTargeted,
-                    perform: receiveDroppedMedia
-                )
-                .overlay {
-                    if isMediaDropTargeted {
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(BrandTheme.accent, style: StrokeStyle(lineWidth: 2, dash: [7, 5]))
-                            .allowsHitTesting(false)
-                    }
-                }
+            if hasRepresentativePhoto {
+                Text("대표 사진은 외부 AI 버튼을 누를 때만 함께 보내요.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             if let message = errorMessage ?? statusMessage {
@@ -342,9 +386,47 @@ struct ComposerView: View {
                     .foregroundStyle(errorMessage == nil ? Color.secondary : Color.red)
                     .transition(.opacity)
             }
+
+            if !trimmedIdea.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Button { Task { await share() } } label: {
+                        HStack {
+                            if isPreparingShare { ProgressView().tint(.white) }
+                            Label(isPreparingShare ? "준비 중" : "\(profileStore.profile.destination.title)으로 →", systemImage: "paperplane.fill")
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(GlossyPrimaryButtonStyle())
+                    .disabled(isPreparingShare || isGenerating)
+                    .accessibilityHint("문구를 자동으로 복사하고 미디어 공유 화면을 엽니다")
+
+                    Label(
+                        shareMessage ?? "문구는 자동 복사됩니다",
+                        systemImage: shareMessageIsError ? "exclamationmark.triangle.fill" : "info.circle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(shareMessageIsError ? .red : .secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
         }
-        .frame(maxWidth: 540, alignment: .leading)
+        .animation(.easeInOut(duration: 0.2), value: previewAspect)
+        .frame(maxWidth: 680, alignment: .leading)
         .starCard()
+    }
+
+    private var appIconThumbnail: some View {
+        Group {
+            if let icon = UIApplication.shared.starManagerIcon {
+                Image(uiImage: icon).resizable()
+            } else {
+                Image(systemName: "star.circle.fill").resizable()
+            }
+        }
+        .scaledToFill()
+        .frame(width: 22, height: 22)
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .accessibilityHidden(true)
     }
 
     private var heroCopy: some View {
@@ -360,6 +442,173 @@ struct ComposerView: View {
                     .accessibilityHidden(true)
             }
         }
+    }
+
+    private var writingSettingsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            BrandSectionTitle(title: "글쓰기 설정", systemImage: "slider.horizontal.3")
+                .font(.headline)
+
+            settingsRow(title: "게시할 곳", systemImage: "paperplane.circle.fill") {
+                Picker("게시할 곳", selection: $profileStore.profile.destination) {
+                    ForEach(PostDestination.allCases) { destination in
+                        Text(destination.title).tag(destination)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .onChange(of: profileStore.profile.destination) { _, _ in
+                    profileStore.profile.clampCharacterCountToDestinationLimit()
+                }
+                Text(profileStore.profile.destination.limitBasisDescription)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            settingsRow(title: "글자 수", systemImage: "textformat.size") {
+                characterCountSlider
+            }
+
+            settingsRow(title: "이모지 사용", systemImage: "face.smiling.fill") {
+                Picker("이모지 사용", selection: $profileStore.profile.emojiIntensity) {
+                    ForEach(EmojiIntensity.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            settingsRow(title: "분위기", systemImage: "cloud.sun.fill") {
+                Picker("분위기", selection: $mood) {
+                    ForEach(PostMood.allCases) { item in
+                        Text(item.rawValue).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            settingsRow(title: "스타일", systemImage: "text.book.closed.fill") {
+                Picker("스타일", selection: $profileStore.profile.style) {
+                    ForEach(PostStyle.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            settingsRow(title: "말투", systemImage: "quote.bubble.fill") {
+                Picker("말투", selection: $profileStore.profile.tone) {
+                    ForEach(PostTone.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            settingsRow(title: "나잇대", systemImage: "person.crop.circle.badge.clock") {
+                Picker("나잇대", selection: $profileStore.profile.ageGroup) {
+                    ForEach(AudienceAgeGroup.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+                Text("나잇대는 프롬프트 힌트로만 쓰이고 다른 설정을 바꾸지 않아요.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            settingsRow(title: "줄넘김", systemImage: "arrow.turn.down.left") {
+                Picker("줄넘김", selection: $profileStore.profile.lineBreakFrequency) {
+                    ForEach(LineBreakFrequency.allCases) { item in
+                        Text(item.title).tag(item)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            settingsRow(title: "내 글 반영", systemImage: "pencil.and.outline") {
+                Picker("내 글 반영", selection: $length) {
+                    ForEach(PostLength.allCases) { Text($0.storyWeightTitle).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Text(length.storyWeightExplanation)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+            settingsRow(title: "주로 쓰는 주제", systemImage: "tag.fill") {
+                TextField("예: 카페 창업 일지", text: $profileStore.profile.accountTopic)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            settingsRow(title: "읽을 사람", systemImage: "person.2.fill") {
+                TextField("예: 오픈 예정 매장 팔로워", text: $profileStore.profile.audience)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            settingsRow(title: "금지 표현", systemImage: "nosign") {
+                TextField("쉼표로 구분해 적어 주세요", text: $profileStore.profile.prohibitedPhrases, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            settingsRow(title: "해시태그 취향", systemImage: "number") {
+                TextField("예: 핵심 키워드 중심", text: $profileStore.profile.hashtagStyle, axis: .vertical)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            settingsRow(title: "추가로 하고 싶은 설정", systemImage: "square.and.pencil") {
+                TextField(
+                    "예: 이모티콘 대신 물결표를 즐겨 써줘 / 문장은 짧게 끊어줘",
+                    text: $profileStore.profile.detailedGuidelines,
+                    axis: .vertical
+                )
+                .lineLimit(3...8)
+                .textFieldStyle(.plain)
+                .padding(10)
+                .background(theme.canvas, in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
+        .padding(14)
+        .background(theme.canvas, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func settingsRow<Content: View>(
+        title: String,
+        systemImage: String,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: systemImage)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            content()
+        }
+    }
+
+    private var characterCountSlider: some View {
+        let upperBound = Double(min(CreatorProfile.characterCountRange.upperBound, profileStore.profile.destination.characterLimit))
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("\(profileStore.profile.controls.characterCount)자")
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                Spacer()
+                Text("\(CreatorProfile.characterCountRange.lowerBound)~\(Int(upperBound))자")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Slider(value: characterCountBinding, in: Double(CreatorProfile.characterCountRange.lowerBound)...upperBound, step: 10)
+        }
+    }
+
+    private var characterCountBinding: Binding<Double> {
+        Binding(
+            get: { Double(profileStore.profile.controls.characterCount) },
+            set: { newValue in
+                var controls = profileStore.profile.controls
+                controls.characterCount = Int(newValue)
+                profileStore.profile.controls = controls
+            }
+        )
     }
 
     private var aiChoiceButtons: some View {
@@ -389,8 +638,8 @@ struct ComposerView: View {
                         }
                     }
                     .buttonStyle(.plain)
-                    .disabled(trimmedIdea.isEmpty || isGenerating)
-                    .opacity(trimmedIdea.isEmpty || isGenerating ? 0.46 : 1)
+                    .disabled(isChoiceDisabled(choice))
+                    .opacity(isChoiceDisabled(choice) ? 0.46 : 1)
                     .accessibilityLabel(choice.title)
                     .accessibilityHint(choice.accessibilityHint)
                 }
@@ -491,6 +740,7 @@ struct ComposerView: View {
         externalSubmittedAt = nil
         elapsedSeconds = 0
         isGenerating = false
+        activeRepresentativePhoto = nil
         statusMessage = "AI 요청을 취소했어요"
     }
 
@@ -502,6 +752,7 @@ struct ComposerView: View {
         externalSubmittedAt = nil
         elapsedSeconds = 0
         isGenerating = false
+        activeRepresentativePhoto = nil
         errorMessage = "1분 59초 동안 답변이 없어서 중단했어요. 다시 시도해 주세요."
     }
 
@@ -518,8 +769,8 @@ struct ComposerView: View {
 
     @MainActor
     private func startExternalGeneration(for provider: ExternalAIProvider) {
-        guard !trimmedIdea.isEmpty else {
-            errorMessage = "이야기를 입력해 주세요."
+        guard !trimmedIdea.isEmpty || hasRepresentativePhoto else {
+            errorMessage = "이야기를 입력하거나 대표 사진을 추가해 주세요."
             return
         }
         let requestID = UUID()
@@ -536,6 +787,7 @@ struct ComposerView: View {
         generatedPost = nil
         generatedSignature = nil
         activeCaptionSource = nil
+        activeRepresentativePhoto = makeRepresentativePhotoAttachment()
         if showsExternalAIBrowser {
             browserContext = ExternalAIBrowserContext(provider: provider)
         }
@@ -604,98 +856,6 @@ struct ComposerView: View {
         .background(theme.canvas, in: RoundedRectangle(cornerRadius: 14))
     }
 
-    private var previewColumn: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                BrandSectionTitle(title: "미리보기", systemImage: "doc.text.image")
-                    .font(.headline)
-                Spacer()
-                if let source = activeCaptionSource {
-                    Label(source.title, systemImage: source.symbolName)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if let post = generatedPost {
-                VStack(alignment: .leading, spacing: 12) {
-                    if comparisonCandidates.count > 1 {
-                        candidateComparison
-                    }
-
-                    if !mediaItems.isEmpty || isLoadingMedia {
-                        MediaPreview(items: mediaItems, aspect: previewAspect.ratio, isLoading: isLoadingMedia)
-                    }
-
-                    if !draftIsCurrent {
-                        Label("조건이 바뀌었어요. 다시 만들어 주세요.", systemImage: "arrow.clockwise.circle.fill")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.orange)
-                    }
-                    if let validation = activeValidationReport {
-                        HStack {
-                            Label(validation.passesAllRules ? "기준 통과" : "확인 필요", systemImage: validation.passesAllRules ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
-                                .foregroundStyle(validation.passesAllRules ? .green : .orange)
-                            Spacer()
-                            Text("\(post.characterCount) / \(validation.format.requiredCharacterCount)자").monospacedDigit()
-                        }
-                        .font(.caption.weight(.semibold))
-
-                        if !validation.passesAllRules {
-                            Text(validation.failedRuleDescriptions.joined(separator: " · "))
-                                .font(.caption2)
-                                .foregroundStyle(.orange)
-                                .lineSpacing(2)
-                        }
-                    }
-
-                    Text(post.composedText)
-                        .font(.body)
-                        .lineSpacing(4)
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(14)
-                        .background(BrandTheme.resultSurface, in: RoundedRectangle(cornerRadius: 14))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(.white, lineWidth: 1)
-                        }
-                        .shadow(color: theme.ink.opacity(0.08), radius: 12, y: 5)
-                        .accessibilityLabel("생성된 게시물, \(post.characterCount)자")
-
-                    Button { Task { await share(post) } } label: {
-                        HStack {
-                            if isPreparingShare { ProgressView().tint(.white) }
-                            Label(isPreparingShare ? "준비 중" : "Instagram으로 →", systemImage: "paperplane.fill")
-                        }
-                        .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(GlossyPrimaryButtonStyle())
-                    .disabled(isPreparingShare || isGenerating)
-                    .accessibilityHint("문구를 자동으로 복사하고 미디어 공유 화면을 엽니다")
-
-                    Label(
-                        shareMessage ?? "문구는 자동 복사됩니다",
-                        systemImage: shareMessageIsError ? "exclamationmark.triangle.fill" : "info.circle"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(shareMessageIsError ? .red : .secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                }
-            } else {
-                Label("게시물을 만들면 여기에 표시됩니다", systemImage: "text.page")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 6)
-            }
-        }
-        .animation(.easeInOut(duration: 0.2), value: previewAspect)
-        .frame(maxWidth: 540, alignment: .leading)
-        .starCard()
-    }
-
     private var candidateComparison: some View {
         VStack(alignment: .leading, spacing: 8) {
             BrandSectionTitle(title: "결과 비교", systemImage: "square.on.square")
@@ -750,6 +910,11 @@ struct ComposerView: View {
 
     private var trimmedIdea: String { idea.trimmingCharacters(in: .whitespacesAndNewlines) }
 
+    private var composerSummaryText: String {
+        let profile = profileStore.profile
+        return "\(profile.destination.title) · \(mood.rawValue) · \(profile.style.title) · \(profile.tone.title) · 목표 \(profile.controls.characterCount)자"
+    }
+
     private var currentDraftSignature: DraftSignature {
         DraftSignature(
             idea: trimmedIdea,
@@ -757,10 +922,6 @@ struct ComposerView: View {
             length: length,
             profile: profileStore.profile
         )
-    }
-
-    private var draftIsCurrent: Bool {
-        generatedSignature == currentDraftSignature
     }
 
     private var comparisonCandidates: [CaptionCandidate] {
@@ -771,17 +932,115 @@ struct ComposerView: View {
         }
     }
 
-    private var activeValidationReport: CaptionValidationReport? {
-        guard let post = generatedPost, let signature = generatedSignature else { return nil }
-        return CaptionValidationReport.evaluate(post.composedText, context: validationContext(for: signature))
+    private var currentValidationContext: CaptionValidationContext {
+        let profile = profileStore.profile
+        return CaptionValidationContext(
+            destinationLimit: profile.destination.characterLimit,
+            prohibitedPhrases: profile.prohibitedPhrases,
+            emojiIntensity: profile.emojiIntensity
+        )
     }
 
-    private var activeCaptionPassesValidation: Bool {
-        activeValidationReport?.passesAllRules == true
+    /// 지금 편집 중인 글(직접 쓴 글이든 AI가 돌려준 글이든)을 그대로 기준으로 검증한다.
+    private var liveValidationReport: CaptionValidationReport? {
+        guard !trimmedIdea.isEmpty else { return nil }
+        return CaptionValidationReport.evaluate(idea, context: currentValidationContext)
     }
 
+    private var hasRepresentativePhoto: Bool {
+        mediaItems.contains { $0.kind == .image }
+    }
+
+    private func isChoiceDisabled(_ choice: AIChoice) -> Bool {
+        if isGenerating { return true }
+        switch choice {
+        case .appleIntelligence:
+            return trimmedIdea.isEmpty
+        case .external:
+            return trimmedIdea.isEmpty && !hasRepresentativePhoto
+        }
+    }
+
+    /// 사진만 있는지, 사진과 글이 함께 있는지, 글만 있는지에 따라 외부 AI에게 보낼 문구를 자동으로 고른다.
     private var externalPrompt: String {
-        profileStore.profile.generationPrompt(for: trimmedIdea, mood: mood, length: length)
+        let profile = profileStore.profile
+        switch (activeRepresentativePhoto != nil, !trimmedIdea.isEmpty) {
+        case (true, true):
+            return photoAndTextPrompt(profile: profile)
+        case (true, false):
+            return photoOnlyPrompt(profile: profile)
+        default:
+            return profile.generationPrompt(for: trimmedIdea, mood: mood, length: length)
+        }
+    }
+
+    /// 사진 관련 요청도 설정 화면에 보이는 값과 "상세 작성 기준"만 사용한다. 숨은 고정 형식은 없다.
+    private func photoOnlyPrompt(profile: CreatorProfile) -> String {
+        var lines: [String] = [
+            "[상황]",
+            "대표 사진 한 장이 함께 첨부돼 있어. 사진을 실제로 살펴보고, 사진에 없는 내용은 지어내지 마.",
+            "",
+            "[원하는 결과]",
+            "사진 속 장면과 분위기를 바탕으로 \(profile.destination.title)에 올릴 한국어 글을 쓰고, 완성 문구만 출력해.",
+            "- 게시 기준: \(profile.destination.limitBasisDescription)",
+            "- 목표 분량: 공백과 줄바꿈 포함 \(profile.controls.characterCount)자를 넘지 않는 선에서 자연스럽게",
+            "- 나잇대: \(profile.ageGroup.promptAudienceHint)",
+            "- 분위기: \(mood.rawValue), \(length.promptInstruction)",
+            "- 이모지 사용: \(profile.emojiIntensity.promptInstruction)",
+            "- 스타일: \(profile.style.promptInstruction)",
+            "- 말투: \(profile.tone.promptInstruction)",
+            "- 줄넘김: \(profile.lineBreakFrequency.promptInstruction)"
+        ]
+        if !profile.accountTopic.isEmpty { lines.append("- 주로 쓰는 주제: \(profile.accountTopic)") }
+        if !profile.audience.isEmpty { lines.append("- 읽을 사람: \(profile.audience)") }
+        if !profile.prohibitedPhrases.isEmpty { lines.append("- 금지 표현: \(profile.prohibitedPhrases)") }
+        if !profile.hashtagStyle.isEmpty { lines.append("- 해시태그 취향: \(profile.hashtagStyle)") }
+        let details = profile.detailedGuidelines.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !details.isEmpty { lines.append("- 추가로 하고 싶은 설정: \(details)") }
+        return lines.joined(separator: "\n")
+    }
+
+    private func photoAndTextPrompt(profile: CreatorProfile) -> String {
+        var lines: [String] = [
+            "[상황]",
+            "대표 사진 한 장과 내가 적은 메모가 함께 있어. 사진을 실제로 살펴보고, 사진과 메모 둘 다에 어울리는 글을 써 줘. 사진에 없는 내용은 지어내지 마.",
+            "",
+            "[내가 입력한 내용]",
+            trimmedIdea,
+            "",
+            "[원하는 결과]",
+            "사진과 위 내용을 함께 반영한 \(profile.destination.title)용 한국어 글을 쓰고, 완성 문구만 출력해.",
+            "- 게시 기준: \(profile.destination.limitBasisDescription)",
+            "- 목표 분량: 공백과 줄바꿈 포함 \(profile.controls.characterCount)자를 넘지 않는 선에서 자연스럽게",
+            "- 나잇대: \(profile.ageGroup.promptAudienceHint)",
+            "- 분위기: \(mood.rawValue), \(length.promptInstruction)",
+            "- 이모지 사용: \(profile.emojiIntensity.promptInstruction)",
+            "- 스타일: \(profile.style.promptInstruction)",
+            "- 말투: \(profile.tone.promptInstruction)",
+            "- 줄넘김: \(profile.lineBreakFrequency.promptInstruction)"
+        ]
+        if !profile.accountTopic.isEmpty { lines.append("- 주로 쓰는 주제: \(profile.accountTopic)") }
+        if !profile.audience.isEmpty { lines.append("- 읽을 사람: \(profile.audience)") }
+        if !profile.prohibitedPhrases.isEmpty { lines.append("- 금지 표현: \(profile.prohibitedPhrases)") }
+        if !profile.hashtagStyle.isEmpty { lines.append("- 해시태그 취향: \(profile.hashtagStyle)") }
+        let details = profile.detailedGuidelines.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !details.isEmpty { lines.append("- 추가로 하고 싶은 설정: \(details)") }
+        return lines.joined(separator: "\n")
+    }
+
+    /// 대표 사진(첫 번째 이미지, 영상 제외)을 방향 정보까지 반영해 그려낸 뒤 안전한 크기로 압축한다.
+    /// 전송 시점에 스냅샷해 이후 미디어 편집이 진행 중인 요청에 섞이지 않게 한다.
+    private func makeRepresentativePhotoAttachment() -> ExternalAIAttachment? {
+        guard let media = mediaItems.first(where: { $0.kind == .image }),
+              let image = UIImage(data: media.data),
+              image.size.width > 0, image.size.height > 0 else { return nil }
+        let maxDimension: CGFloat = 1600
+        let scale = min(1, maxDimension / max(image.size.width, image.size.height))
+        let targetSize = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: targetSize)
+        let normalized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: targetSize)) }
+        guard let jpeg = normalized.jpegData(compressionQuality: 0.82) else { return nil }
+        return ExternalAIAttachment(data: jpeg)
     }
 
     @MainActor
@@ -790,6 +1049,7 @@ struct ComposerView: View {
             errorMessage = "복사한 결과가 비어 있어요."
             activeExternalProvider = nil
             isGenerating = false
+            activeRepresentativePhoto = nil
             return
         }
         isIdeaFocused = false
@@ -806,7 +1066,8 @@ struct ComposerView: View {
             callToAction: lines.last ?? "",
             hashtags: hashtags,
             composedText: text,
-            targetCharacterCount: signature.profile.controls.characterCount
+            targetCharacterCount: signature.profile.controls.characterCount,
+            destinationCharacterLimit: signature.profile.destination.characterLimit
         )
         let candidate = CaptionCandidate(
             source: provider.captionSource,
@@ -822,6 +1083,7 @@ struct ComposerView: View {
         elapsedSeconds = 0
         isGenerating = false
         errorMessage = nil
+        activeRepresentativePhoto = nil
         statusMessage = validationReport(for: candidate).passesAllRules ? "\(provider.title) 결과 가져옴" : "가져옴 · 기준 확인 필요"
     }
 
@@ -834,6 +1096,7 @@ struct ComposerView: View {
         generatedPost = candidate.post
         generatedSignature = candidate.signature
         activeCaptionSource = candidate.source
+        idea = candidate.post.composedText
     }
 
     @MainActor
@@ -865,14 +1128,15 @@ struct ComposerView: View {
         showsImagePlayground = false
         isGeneratingImage = false
         imageGenerationPostID = nil
+        activeRepresentativePhoto = nil
         resetScrollRequest = UUID()
     }
 
     private func validationContext(for signature: DraftSignature) -> CaptionValidationContext {
         CaptionValidationContext(
-            requiredCharacterCount: signature.profile.controls.characterCount,
+            destinationLimit: signature.profile.destination.characterLimit,
             prohibitedPhrases: signature.profile.prohibitedPhrases,
-            allowsBodyEmoji: signature.profile.usesEmoji
+            emojiIntensity: signature.profile.emojiIntensity
         )
     }
 
@@ -928,9 +1192,7 @@ struct ComposerView: View {
             )
             guard generationID == requestID else { return }
             captionCandidates[source] = candidate
-            generatedPost = post
-            generatedSignature = signature
-            activeCaptionSource = source
+            useCandidate(candidate)
             statusMessage = validationReport(for: candidate).passesAllRules ? "완료" : "확인 필요"
         } catch {
             if generationID == requestID {
@@ -1076,7 +1338,13 @@ struct ComposerView: View {
     }
 
     @MainActor
-    private func share(_ post: GeneratedPost) async {
+    private func share() async {
+        let text = trimmedIdea
+        guard !text.isEmpty else {
+            shareMessage = "먼저 이야기를 적어 주세요."
+            shareMessageIsError = true
+            return
+        }
         guard !mediaItems.isEmpty else {
             shareMessage = "사진이나 영상을 먼저 추가해 주세요."
             shareMessageIsError = true
@@ -1087,12 +1355,7 @@ struct ComposerView: View {
             shareMessageIsError = true
             return
         }
-        guard draftIsCurrent else {
-            shareMessage = "작성 조건이 바뀌었어요. 게시물을 다시 만든 뒤 공유해 주세요."
-            shareMessageIsError = true
-            return
-        }
-        UIPasteboard.general.string = post.composedText
+        UIPasteboard.general.string = text
         let requestID = UUID()
         sharePreparationID = requestID
         isPreparingShare = true
@@ -1116,7 +1379,7 @@ struct ComposerView: View {
             } else {
                 activityItems = prepared.items
             }
-            shareMessage = activeCaptionPassesValidation ? "문구 복사됨" : "확인 필요 · 문구 복사됨"
+            shareMessage = (liveValidationReport?.passesAllRules ?? false) ? "문구 복사됨" : "확인 필요 · 문구 복사됨"
             shareMessageIsError = false
             sharePayload = SharePayload(items: activityItems, cleanupURLs: [prepared.directory])
         } catch {
@@ -2086,6 +2349,17 @@ private struct ActivityView: UIViewControllerRepresentable {
         return controller
     }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+private extension UIApplication {
+    /// 대체 아이콘이 아닌, 지금 기기에 실제 표시되는 앱 아이콘 이미지를 번들에서 읽어 온다.
+    var starManagerIcon: UIImage? {
+        guard let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
+              let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+              let files = primary["CFBundleIconFiles"] as? [String],
+              let name = files.last else { return nil }
+        return UIImage(named: name)
+    }
 }
 
 private enum MediaLoadError: Error { case empty }

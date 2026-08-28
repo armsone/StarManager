@@ -37,7 +37,7 @@ struct ContentView: View {
                 ProfileSettingsView()
             }
             .tabItem {
-                Label("나의 취향", systemImage: "person.crop.circle")
+                Label("설정", systemImage: "gearshape.fill")
             }
             .tag(Tab.settings)
         }
