@@ -6,6 +6,7 @@ struct ContentView: View {
     @State private var selectedTab = Tab.composer
     @State private var resetRequest = UUID()
     @Environment(\.brandTheme) private var theme
+    @EnvironmentObject private var automationCoordinator: AutomationCoordinator
 
     var body: some View {
         TabView(selection: Binding(
@@ -42,10 +43,23 @@ struct ContentView: View {
             .tag(Tab.settings)
         }
         .foregroundStyle(theme.ink)
+        .onChange(of: automationCoordinator.trigger, initial: true) { _, newValue in
+            guard newValue != nil else { return }
+            selectedTab = .composer
+        }
+        .onChange(of: automationCoordinator.cameraTrigger, initial: true) { _, newValue in
+            guard newValue != nil else { return }
+            selectedTab = .composer
+        }
+        .onChange(of: automationCoordinator.shareBatchTrigger, initial: true) { _, newValue in
+            guard newValue != nil else { return }
+            selectedTab = .composer
+        }
     }
 }
 
 #Preview {
     ContentView()
         .environmentObject(CreatorProfileStore())
+        .environmentObject(AutomationCoordinator.shared)
 }

@@ -19,6 +19,7 @@ struct ComposerView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.brandTheme) private var theme
     @EnvironmentObject private var profileStore: CreatorProfileStore
+    @EnvironmentObject private var automationCoordinator: AutomationCoordinator
 
     @State private var idea = ""
     @FocusState private var isIdeaFocused: Bool
@@ -64,6 +65,12 @@ struct ComposerView: View {
     @State private var isPreparingExternalAttachments = false
     @State private var sparklesRotationAngle: Double = 0
     @State private var isWritingSettingsExpanded = false
+    @State private var isAutomationPickerPresented = false
+    @State private var automationPickerItems: [PhotosPickerItem] = []
+    /// 퀵 액션으로 들어와 AIBI 생성이 진행 중이거나 결과/실패를 기다리는 동안 true. 전용 자동화 화면(fullScreenCover)의 표시 여부를 결정한다.
+    @State private var isAutomationSessionActive = false
+    @State private var automationSurfaceState: AutomationSurfaceState = .processing
+    @State private var automationRelayState: AutomationRelayState = .preparing
     @AppStorage("hasShownPastePermissionGuidance") private var hasShownPastePermissionGuidance = false
 
     var body: some View {
@@ -122,6 +129,7 @@ struct ComposerView: View {
                         externalSubmittedAt = date
                         elapsedSeconds = 0
                         statusMessage = "정보를 보냈어요"
+                        automationRelayState = .waiting
                     },
                     onSuccess: { text in
                         importAIResult(text, from: provider)
@@ -136,6 +144,9 @@ struct ComposerView: View {
                         elapsedSeconds = 0
                         isGenerating = false
                         activePhotoAttachments = []
+                        if isAutomationSessionActive {
+                            automationSurfaceState = .failure(err)
+                        }
                     }
                 )
                 .id(generationID)
@@ -181,16 +192,78 @@ struct ComposerView: View {
             mediaLoadID = loadID
             mediaLoadTask = Task { await loadMedia(from: items, loadID: loadID) }
         }
+        .onChange(of: automationCoordinator.trigger, initial: true) { _, requestID in
+            guard let requestID else { return }
+            Task { @MainActor in
+                await Task.yield()
+                guard automationCoordinator.trigger == requestID else { return }
+                automationCoordinator.clear(requestID)
+                dismissKeyboardForAutomation()
+                resetComposer()
+                await Task.yield()
+                isAutomationPickerPresented = true
+            }
+        }
+        .onChange(of: automationCoordinator.cameraTrigger, initial: true) { _, requestID in
+            guard let requestID else { return }
+            Task { @MainActor in
+                await Task.yield()
+                guard automationCoordinator.cameraTrigger == requestID else { return }
+                automationCoordinator.clearCameraTrigger(requestID)
+                dismissKeyboardForAutomation()
+                resetComposer()
+                await Task.yield()
+                openCamera()
+            }
+        }
+        .onChange(of: automationCoordinator.shareBatchTrigger, initial: true) { _, requestID in
+            guard let requestID else { return }
+            Task { @MainActor in
+                await Task.yield()
+                guard automationCoordinator.shareBatchTrigger == requestID else { return }
+                automationCoordinator.clearShareBatchTrigger(requestID)
+                dismissKeyboardForAutomation()
+                resetComposer()
+                await Task.yield()
+                await importPendingShareBatch()
+            }
+        }
+        .photosPicker(
+            isPresented: $isAutomationPickerPresented,
+            selection: $automationPickerItems,
+            maxSelectionCount: max(1, Self.maxMediaItems - mediaItems.count),
+            selectionBehavior: .ordered,
+            matching: .images,
+            photoLibrary: .shared()
+        )
+        .onChange(of: automationPickerItems) { _, items in
+            guard !items.isEmpty else { return }
+            dismissKeyboardForAutomation()
+            let pickedItems = items
+            automationPickerItems = []
+            mediaLoadTask?.cancel()
+            let loadID = UUID()
+            mediaLoadID = loadID
+            mediaLoadTask = Task {
+                await loadMedia(from: pickedItems, loadID: loadID)
+                guard mediaLoadID == loadID, !isGenerating else { return }
+                guard hasRepresentativePhoto, let provider = ExternalAIProvider.allCases.randomElement() else { return }
+                automationSurfaceState = .processing
+                dismissKeyboardForAutomation()
+                isAutomationSessionActive = true
+                startExternalGeneration(for: provider)
+            }
+        }
         .sheet(item: $sharePayload) { payload in
             ActivityView(items: payload.items, cleanupURLs: payload.cleanupURLs) { completed, error in
                 if let error {
-                    shareMessage = "공유하지 못했어요: \(error.localizedDescription)"
+                    shareMessage = "보내지 못했어요: \(error.localizedDescription)"
                     shareMessageIsError = true
                 } else if completed {
-                    shareMessage = "공유 완료 · 문구 붙여넣기"
+                    shareMessage = "보내기 완료 · 문구 붙여넣기"
                     shareMessageIsError = false
                 } else {
-                    shareMessage = "공유 취소 · 문구는 복사됨"
+                    shareMessage = "보내기 취소 · 문구는 복사됨"
                     shareMessageIsError = false
                 }
             }
@@ -205,6 +278,7 @@ struct ComposerView: View {
                     externalSubmittedAt = date
                     elapsedSeconds = 0
                     statusMessage = "정보를 보냈어요"
+                    automationRelayState = .waiting
                 },
                 onError: { message in
                     errorMessage = message
@@ -213,6 +287,9 @@ struct ComposerView: View {
                     isGenerating = false
                     activeExternalProvider = nil
                     activePhotoAttachments = []
+                    if isAutomationSessionActive {
+                        automationSurfaceState = .failure(message)
+                    }
                 },
                 onImport: { text in
                     importAIResult(text, from: context.provider)
@@ -230,10 +307,46 @@ struct ComposerView: View {
                         isGenerating = false
                         activeExternalProvider = nil
                         activePhotoAttachments = []
+                        if isAutomationSessionActive {
+                            automationSurfaceState = .failure("연결이 중단됐어요. 다시 시도해 주세요.")
+                        }
                     }
                     browserContext = nil
                 }
             )
+        }
+        .fullScreenCover(isPresented: $isAutomationSessionActive) {
+            AutomationSurfaceView(
+                theme: theme,
+                state: automationSurfaceState,
+                relayMessage: automationRelayState.message,
+                resultImages: mediaItems.filter { $0.kind == .image }.map(\.data),
+                isPreparingShare: isPreparingShare,
+                onCancel: closeAutomationSurface,
+                onRetry: retryAutomationGeneration,
+                onShare: { Task { await share() } },
+                onClose: closeAutomationSurface
+            )
+            .interactiveDismissDisabled()
+            .onAppear {
+                dismissKeyboardForAutomation()
+            }
+        }
+        .onChange(of: isAutomationSessionActive) { _, isActive in
+            guard isActive else { return }
+            dismissKeyboardForAutomation()
+            Task { @MainActor in
+                await Task.yield()
+                dismissKeyboardForAutomation()
+            }
+        }
+        .onChange(of: automationSurfaceState) { _, _ in
+            guard isAutomationSessionActive else { return }
+            dismissKeyboardForAutomation()
+        }
+        .onChange(of: browserContext) { _, context in
+            guard context == nil, isAutomationSessionActive else { return }
+            dismissKeyboardAfterBrowserDismissal()
         }
         .fullScreenCover(isPresented: $showsCamera) {
             CameraCaptureView(
@@ -357,7 +470,7 @@ struct ComposerView: View {
                     .textFieldStyle(.plain)
                     .padding(14)
                     .background(theme.canvas, in: RoundedRectangle(cornerRadius: 14))
-                    .disabled(isGenerating)
+                    .disabled(isGenerating || isAutomationSessionActive)
                     .focused($isIdeaFocused)
                     .textSelection(.enabled)
                     .accessibilityHint("게시물의 바탕이 될 이야기를 입력하거나 AI가 만든 글을 다듬습니다")
@@ -750,6 +863,7 @@ struct ComposerView: View {
         isGenerating = false
         activePhotoAttachments = []
         isPreparingExternalAttachments = false
+        isAutomationSessionActive = false
         statusMessage = "AI 요청을 취소했어요"
     }
 
@@ -765,7 +879,11 @@ struct ComposerView: View {
         isGenerating = false
         activePhotoAttachments = []
         isPreparingExternalAttachments = false
-        errorMessage = "1분 59초 동안 답변이 없어서 중단했어요. 다시 시도해 주세요."
+        let message = "1분 59초 동안 답변이 없어서 중단했어요. 다시 시도해 주세요."
+        errorMessage = message
+        if isAutomationSessionActive {
+            automationSurfaceState = .failure(message)
+        }
     }
 
     @MainActor
@@ -794,6 +912,7 @@ struct ComposerView: View {
         elapsedSeconds = 0
         errorMessage = nil
         statusMessage = "\(provider.title)에 연결하는 중…"
+        automationRelayState = .preparing
         shareMessage = nil
         shareMessageIsError = false
         generatedPost = nil
@@ -823,15 +942,20 @@ struct ComposerView: View {
             externalAttachmentPreparationTask = nil
             isPreparingExternalAttachments = false
             guard let prepared, prepared.count == sourceImages.count else {
-                errorMessage = "선택한 사진을 전송용으로 준비하지 못했어요. 사진을 확인하고 다시 시도해 주세요."
+                let message = "선택한 사진을 전송용으로 준비하지 못했어요. 사진을 확인하고 다시 시도해 주세요."
+                errorMessage = message
                 activeExternalProvider = nil
                 pendingExternalProvider = nil
                 isGenerating = false
                 activePhotoAttachments = []
+                if isAutomationSessionActive {
+                    automationSurfaceState = .failure(message)
+                }
                 return
             }
             activePhotoAttachments = prepared
             statusMessage = "사진 \(prepared.count)장을 \(provider.title)에 연결하는 중…"
+            automationRelayState = .sending
             if showsExternalAIBrowser {
                 browserContext = ExternalAIBrowserContext(provider: provider)
             }
@@ -1063,11 +1187,16 @@ struct ComposerView: View {
 
     @MainActor
     private func importAIResult(_ text: String, from provider: ExternalAIProvider) {
+        dismissKeyboardForAutomation()
         guard !text.isEmpty else {
-            errorMessage = "복사한 결과가 비어 있어요."
+            let message = "복사한 결과가 비어 있어요."
+            errorMessage = message
             activeExternalProvider = nil
             isGenerating = false
             activePhotoAttachments = []
+            if isAutomationSessionActive {
+                automationSurfaceState = .failure(message)
+            }
             return
         }
         isIdeaFocused = false
@@ -1101,6 +1230,9 @@ struct ComposerView: View {
         errorMessage = nil
         activePhotoAttachments = []
         statusMessage = validationReport(for: candidate).passesAllRules ? "\(provider.title) 결과 가져옴" : "가져옴 · 기준 확인 필요"
+        if isAutomationSessionActive {
+            automationSurfaceState = .result(text)
+        }
     }
 
     @MainActor
@@ -1117,6 +1249,7 @@ struct ComposerView: View {
 
     @MainActor
     private func resetComposer() {
+        dismissKeyboardForAutomation()
         mediaLoadTask?.cancel()
         mediaLoadID = UUID()
         generationID = nil
@@ -1148,7 +1281,44 @@ struct ComposerView: View {
         externalAttachmentPreparationTask = nil
         activePhotoAttachments = []
         isPreparingExternalAttachments = false
+        isAutomationSessionActive = false
+        automationSurfaceState = .processing
+        automationRelayState = .preparing
+        isAutomationPickerPresented = false
+        automationPickerItems = []
         resetScrollRequest = UUID()
+    }
+
+    /// 자동화 화면의 취소/닫기 동작. 생성 중이면 AIBI 작업을 즉시 중단하고, 결과·실패 상태면 조용히 화면만 닫는다.
+    @MainActor
+    private func closeAutomationSurface() {
+        if isGenerating {
+            cancelExternalGeneration()
+        } else {
+            externalAttachmentPreparationTask?.cancel()
+            externalAttachmentPreparationTask = nil
+            generationID = nil
+            browserContext = nil
+            isAutomationSessionActive = false
+            automationSurfaceState = .processing
+        }
+    }
+
+    /// 같은 선택 사진을 그대로 유지한 채, 이전 결과만 지우고 새 무작위 제공자로 재시도한다.
+    @MainActor
+    private func retryAutomationGeneration() {
+        guard let provider = ExternalAIProvider.allCases.randomElement() else { return }
+        dismissKeyboardForAutomation()
+        idea = ""
+        generatedPost = nil
+        generatedSignature = nil
+        activeCaptionSource = nil
+        captionCandidates.removeAll()
+        errorMessage = nil
+        statusMessage = nil
+        automationSurfaceState = .processing
+        automationRelayState = .preparing
+        startExternalGeneration(for: provider)
     }
 
     private func validationContext(for signature: DraftSignature) -> CaptionValidationContext {
@@ -1254,6 +1424,74 @@ struct ComposerView: View {
             errorMessage = "선택한 미디어를 불러오지 못했어요."
         } else {
             appendMedia(loaded)
+        }
+    }
+
+    /// 공유 확장이 채워 둔 공유 보관함의 사진을 사진 선택기 없이 바로 미디어에 채우고 자동화를 시작한다.
+    /// 메모리로 불러오는 데 성공한 경우에만 공유 보관함의 파일과 매니페스트를 지운다.
+    @MainActor
+    private func importPendingShareBatch() async {
+        guard let batch = SharedInbox.oldestPendingBatch() else { return }
+
+        dismissKeyboardForAutomation()
+
+        isLoadingMedia = true
+        errorMessage = nil
+        var loaded: [ComposerMedia] = []
+        for filename in batch.filenames {
+            guard let url = try? SharedInbox.fileURL(named: filename),
+                  let data = try? Data(contentsOf: url) else { continue }
+            loaded.append(ComposerMedia(data: data, kind: .image, fileExtension: url.pathExtension))
+        }
+        isLoadingMedia = false
+
+        guard loaded.count == batch.filenames.count else {
+            errorMessage = "공유된 사진을 불러오지 못했어요. 다시 공유해 주세요."
+            return
+        }
+
+        mediaItems = Array(loaded.prefix(Self.maxMediaItems))
+        do {
+            try SharedInbox.removeBatch(id: batch.id)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        SharedInbox.deleteFiles(for: batch)
+
+        guard hasRepresentativePhoto, let provider = ExternalAIProvider.allCases.randomElement() else { return }
+        automationSurfaceState = .processing
+        dismissKeyboardForAutomation()
+        isAutomationSessionActive = true
+        startExternalGeneration(for: provider)
+    }
+
+    @MainActor
+    private func dismissKeyboardForAutomation() {
+        isIdeaFocused = false
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
+        for scene in UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }) {
+            for window in scene.windows {
+                window.endEditing(true)
+            }
+        }
+    }
+
+    /// 브라우저 닫힘 전환 중 iOS가 이전 입력 포커스를 복원하는 경우까지 다시 내려 준다.
+    @MainActor
+    private func dismissKeyboardAfterBrowserDismissal() {
+        dismissKeyboardForAutomation()
+        Task { @MainActor in
+            for delay in [80, 260, 520] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard isAutomationSessionActive, browserContext == nil else { return }
+                dismissKeyboardForAutomation()
+            }
         }
     }
 
@@ -2457,8 +2695,524 @@ private extension UIApplication {
 
 private enum MediaLoadError: Error { case empty }
 
+/// Home Screen "자동화" 퀵 액션 전용 전체 화면 표면의 상태. 진행 중에는 링만, 완료·실패 시에만 결과/오류 화면을 보여준다.
+private enum AutomationSurfaceState: Equatable {
+    case processing
+    case result(String)
+    case failure(String)
+}
+
+private enum AutomationRelayState: Equatable {
+    case preparing
+    case sending
+    case waiting
+
+    var message: String {
+        switch self {
+        case .preparing: "미디어 준비 중"
+        case .sending: "보내는 중"
+        case .waiting: "보냈음 · 답변 기다림"
+        }
+    }
+}
+
+/// 자동화 퀵 액션 흐름 전용 전체 화면. 제공자 이름·단계 텍스트·카운트다운·컴포저 카드/탭/툴바 등은 절대 노출하지 않는다.
+private struct AutomationSurfaceView: View {
+    let theme: BrandTheme
+    let state: AutomationSurfaceState
+    let relayMessage: String
+    let resultImages: [Data]
+    let isPreparingShare: Bool
+    let onCancel: () -> Void
+    let onRetry: () -> Void
+    let onShare: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        ZStack {
+            GeometryReader { proxy in
+                Image("AutomationInterstellarBackdrop")
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .clipped()
+                    .overlay(Color.black.opacity(0.08))
+            }
+            .ignoresSafeArea()
+
+            switch state {
+            case .processing:
+                processingContent
+            case let .result(text):
+                resultContent(text: text)
+            case let .failure(message):
+                failureContent(message: message)
+            }
+
+            VStack {
+                StarManagerSignatureTitle()
+                    .padding(.top, 72)
+                Spacer()
+            }
+        }
+        .statusBarHidden()
+    }
+
+    private var processingContent: some View {
+        ZStack {
+            Button(action: onCancel) {
+                AutomationProgressRing()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("자동화 취소")
+            .accessibilityHint("회전하는 포털 중앙의 닫기 버튼입니다")
+
+            EngineFlareFlyby()
+
+            Text(relayMessage)
+                .font(.system(.headline, design: .rounded, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.94))
+                .contentTransition(.opacity)
+                .animation(.easeInOut(duration: 0.25), value: relayMessage)
+                .offset(y: 82)
+                .accessibilityLabel("자동화 상태")
+                .accessibilityValue(relayMessage)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func resultContent(text: String) -> some View {
+        VStack(spacing: 0) {
+            Color.clear.frame(height: 136)
+
+            Spacer(minLength: 4)
+
+            if !resultImages.isEmpty {
+                HStack(spacing: 4) {
+                    ForEach(Array(resultImages.enumerated()), id: \.offset) { index, data in
+                        AutomationResultThumbnail(data: data, index: index)
+                            .frame(width: 40, height: 40)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .offset(y: -5)
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+            }
+
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 18, weight: .regular, design: .rounded))
+                    .foregroundStyle(.white.opacity(0.96))
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(24)
+                    .background(
+                        Color.black.opacity(0.46),
+                        in: RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 26, style: .continuous)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        .white.opacity(0.42),
+                                        Color(red: 1.0, green: 0.43, blue: 0.48).opacity(0.7),
+                                        Color(red: 0.68, green: 0.42, blue: 1.0).opacity(0.46)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.2
+                            )
+                    }
+                    .shadow(color: .black.opacity(0.34), radius: 24, y: 12)
+                    .accessibilityLabel("만든 글")
+                    .accessibilityValue(text)
+            }
+            .frame(maxHeight: resultPanelMaxHeight)
+            .padding(.horizontal, 20)
+
+            Spacer(minLength: 12)
+
+            VStack(spacing: 10) {
+                Button(action: onShare) {
+                    HStack {
+                        if isPreparingShare { ProgressView().tint(.white) }
+                        Label(
+                            isPreparingShare ? "보낼 준비 중" : "Instagram으로 보내기",
+                            systemImage: "arrow.up.forward"
+                        )
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(InstagramVoyageButtonStyle())
+                .disabled(isPreparingShare)
+                .accessibilityHint("문구와 미디어를 Instagram으로 보낼 화면을 엽니다")
+
+                HStack(spacing: 10) {
+                    Button(action: onClose) {
+                        Label("취소", systemImage: "xmark")
+                    }
+                    .buttonStyle(AutomationGlassButtonStyle())
+                    .accessibilityHint("결과 화면을 닫고 스튜디오로 돌아갑니다")
+
+                    Button(action: onRetry) {
+                        Label("다시 만들기", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(AutomationGlassButtonStyle())
+                    .disabled(isPreparingShare)
+                    .accessibilityHint("같은 사진으로 다른 AI에게 새로 요청합니다")
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 32)
+        }
+    }
+
+    private var resultPanelMaxHeight: CGFloat {
+        resultImages.isEmpty ? 480 : 390
+    }
+
+    private func failureContent(message: String) -> some View {
+        VStack(spacing: 22) {
+            Spacer()
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 40, weight: .semibold))
+                .foregroundStyle(BrandTheme.accent)
+                .accessibilityHidden(true)
+            Text(message)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white.opacity(0.94))
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+                .accessibilityLabel("자동화 실패")
+                .accessibilityValue(message)
+            Spacer()
+            VStack(spacing: 10) {
+                Button(action: onRetry) {
+                    Label("다시 시도", systemImage: "arrow.clockwise")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(GlossyPrimaryButtonStyle())
+                .accessibilityHint("같은 사진으로 다른 AI에게 새로 요청합니다")
+
+                Button(action: onClose) {
+                    Text("닫기")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(theme.ink)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .buttonStyle(.plain)
+                .background(theme.surface, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(theme.border, lineWidth: 1)
+                }
+                .accessibilityLabel("자동화 닫기")
+                .accessibilityHint("자동화 화면을 닫고 스튜디오로 돌아갑니다")
+            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 40)
+        }
+    }
+}
+
+private struct AutomationResultThumbnail: View {
+    let data: Data
+    let index: Int
+
+    var body: some View {
+        Group {
+            if let image = UIImage(data: data) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Color.white.opacity(0.08)
+                    .overlay {
+                        Image(systemName: "photo")
+                            .foregroundStyle(.white.opacity(0.65))
+                    }
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [.white.opacity(0.42), BrandTheme.accent.opacity(0.56)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+        }
+        .shadow(color: .black.opacity(0.28), radius: 6, y: 3)
+        .accessibilityLabel("입력 사진 \(index + 1)")
+    }
+}
+
+private struct StarManagerSignatureTitle: View {
+    var body: some View {
+        Text("Star Manager")
+            .font(.custom("SnellRoundhand-Bold", size: 38, relativeTo: .largeTitle))
+            .foregroundStyle(
+                LinearGradient(
+                    colors: [
+                        .white,
+                        Color(red: 1.0, green: 0.75, blue: 0.65),
+                        Color(red: 1.0, green: 0.42, blue: 0.55)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .shadow(color: Color(red: 1.0, green: 0.36, blue: 0.45).opacity(0.72), radius: 14)
+            .shadow(color: .black.opacity(0.65), radius: 3, y: 2)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+private struct InstagramVoyageButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.headline.weight(.bold))
+            .foregroundStyle(.white)
+            .padding(.vertical, 16)
+            .background(
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.42, green: 0.22, blue: 0.84),
+                        Color(red: 0.86, green: 0.16, blue: 0.52),
+                        Color(red: 1.0, green: 0.43, blue: 0.28)
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                ),
+                in: Capsule()
+            )
+            .overlay { Capsule().stroke(.white.opacity(0.34), lineWidth: 1) }
+            .shadow(color: Color(red: 0.92, green: 0.22, blue: 0.48).opacity(0.48), radius: 18, y: 8)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .opacity(configuration.isPressed ? 0.88 : 1)
+            .animation(.easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
+private struct AutomationGlassButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white.opacity(0.95))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 13)
+            .background(Color.black.opacity(0.46), in: Capsule())
+            .overlay {
+                Capsule().stroke(
+                    LinearGradient(
+                        colors: [.white.opacity(0.34), BrandTheme.accent.opacity(0.48)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+            }
+            .shadow(color: .black.opacity(0.25), radius: 10, y: 5)
+            .scaleEffect(configuration.isPressed ? 0.98 : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
+    }
+}
+
+/// 출발점부터 현재 위치까지 빛의 항로가 차오르며 포털을 통과하는 엔진 불꽃.
+/// 한 번의 비행 뒤에는 잠시 쉬어, 계속 움직이면서도 진행 화면을 산만하게 만들지 않는다.
+private struct EngineFlareFlyby: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var startedAt = Date()
+
+    private let flightDuration = 40.0
+    private let passageCount = 3
+
+    var body: some View {
+        GeometryReader { proxy in
+            if !reduceMotion {
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { timeline in
+                    let totalElapsed = timeline.date.timeIntervalSince(startedAt)
+                    let totalDuration = flightDuration * Double(passageCount)
+                    let isWithinPassages = totalElapsed < totalDuration
+                    let elapsed = totalElapsed.truncatingRemainder(dividingBy: flightDuration)
+                    let progress = CGFloat(min(max(elapsed / flightDuration, 0), 1))
+                    let fade = isWithinPassages ? 1.0 : 0.0
+                    let horizontalSpan = proxy.size.width + 56
+                    let originalVerticalSpan = -proxy.size.height * 0.28
+                    let originalAngle = atan2(originalVerticalSpan, horizontalSpan)
+                    let quarterAngle = originalAngle / 4
+                    let verticalSpan = tan(quarterAngle) * horizontalSpan
+                    let centerY = proxy.size.height / 2
+                    let start = CGPoint(x: -28, y: centerY - verticalSpan / 2)
+                    let end = CGPoint(x: proxy.size.width + 28, y: centerY + verticalSpan / 2)
+                    let current = CGPoint(
+                        x: start.x + (end.x - start.x) * progress,
+                        y: start.y + (end.y - start.y) * progress
+                    )
+                    let angle = Angle(radians: quarterAngle)
+
+                    ZStack {
+                        Canvas { context, _ in
+                            var path = Path()
+                            path.move(to: start)
+                            path.addLine(to: current)
+
+                            let trail = GraphicsContext.Shading.linearGradient(
+                                Gradient(colors: [
+                                    .clear,
+                                    Color.white.opacity(0.16),
+                                    Color(red: 1.0, green: 0.64, blue: 0.28).opacity(0.55),
+                                    Color(red: 0.78, green: 0.88, blue: 1.0).opacity(0.88),
+                                    .white
+                                ]),
+                                startPoint: start,
+                                endPoint: current
+                            )
+
+                            var glowContext = context
+                            glowContext.addFilter(.blur(radius: 8))
+                            glowContext.stroke(
+                                path,
+                                with: trail,
+                                style: StrokeStyle(lineWidth: 8, lineCap: .round)
+                            )
+                            context.stroke(
+                                path,
+                                with: trail,
+                                style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
+                            )
+                        }
+                        .opacity(fade)
+
+                        EngineFlareGlyph()
+                            .rotationEffect(angle)
+                            .position(current)
+                            .opacity(fade)
+                    }
+                }
+            }
+        }
+        .onAppear { startedAt = Date() }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct EngineFlareGlyph: View {
+    var body: some View {
+        ZStack(alignment: .trailing) {
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            .clear,
+                            Color(red: 1.0, green: 0.62, blue: 0.24).opacity(0.42),
+                            Color(red: 0.76, green: 0.88, blue: 1.0).opacity(0.82),
+                            .white
+                        ],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 58, height: 5)
+                .shadow(color: Color(red: 1.0, green: 0.68, blue: 0.3).opacity(0.76), radius: 9)
+
+            Capsule()
+                .fill(
+                    LinearGradient(
+                        colors: [.clear, Color.white.opacity(0.72)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+                .frame(width: 42, height: 1.5)
+                .offset(y: 4)
+
+            Circle()
+                .fill(.white)
+                .frame(width: 6, height: 6)
+                .shadow(color: Color(red: 0.78, green: 0.9, blue: 1.0), radius: 7)
+        }
+        .frame(width: 64, height: 16)
+    }
+}
+
+/// 제공자 이름이나 단계 문구 없이, 작업 중임을 보여주는 회전하는 원형 진행 링.
+private struct AutomationProgressRing: View {
+    @State private var rotationAngle: Double = 0
+    @State private var rotationDirection: Double = 1
+
+    var body: some View {
+        ZStack {
+            Image("AutomationBlackHole")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 188, height: 150)
+
+            ZStack {
+                Circle()
+                    .stroke(.white.opacity(0.13), lineWidth: 1.5)
+
+                Circle()
+                    .trim(from: 0.08, to: 0.8)
+                    .stroke(
+                        AngularGradient(
+                            colors: [
+                                .clear,
+                                .white,
+                                Color(red: 1.0, green: 0.82, blue: 0.5),
+                                Color(red: 1.0, green: 0.58, blue: 0.24),
+                                .clear
+                            ],
+                            center: .center
+                        ),
+                        style: StrokeStyle(lineWidth: 4, lineCap: .round)
+                    )
+                    .shadow(color: Color(red: 1.0, green: 0.68, blue: 0.32).opacity(0.9), radius: 7)
+            }
+            .frame(width: 48, height: 48)
+            .rotationEffect(.degrees(rotationAngle))
+
+            Image(systemName: "xmark")
+                .font(.system(size: 17, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.95))
+                .shadow(color: .black, radius: 3)
+        }
+            .frame(width: 188, height: 150)
+            .accessibilityHidden(true)
+            .task {
+                rotationAngle = Double.random(in: 0..<360)
+                rotationDirection = Bool.random() ? 1 : -1
+
+                while !Task.isCancelled {
+                    let speedFactor = Double.random(in: 0.4...0.9)
+                    let revolutionDuration = 1.1 / speedFactor
+                    withAnimation(.linear(duration: revolutionDuration)) {
+                        rotationAngle += rotationDirection * 360
+                    }
+                    do {
+                        try await Task.sleep(for: .seconds(revolutionDuration))
+                    } catch {
+                        break
+                    }
+                }
+            }
+    }
+}
+
 #Preview {
     NavigationStack { ComposerView() }
         .environmentObject(CreatorProfileStore())
         .environmentObject(DirectAIConfigurationStore())
+        .environmentObject(AutomationCoordinator.shared)
 }

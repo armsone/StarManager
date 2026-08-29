@@ -1,0 +1,148 @@
+import UIKit
+
+/// 기본 실행의 자동화 미디어 선택, Home Screen의 카메라 퀵 액션, 공유 확장 사진 배치를
+/// SwiftUI 컴포저 흐름으로 전달하는 다리 역할.
+@MainActor
+final class AutomationCoordinator: ObservableObject {
+    static let shared = AutomationCoordinator()
+
+    static let cameraShortcutItemType = "com.armsone.StarManager.camera"
+    static let urlScheme = "starmanager"
+    static let urlHost = "automation"
+
+    /// 일반 앱 실행 트리거 — 기존 자동화 퀵 액션과 같은 사진 선택기를 띄운다.
+    @Published private(set) var trigger: UUID? = UUID()
+    /// 카메라 퀵 액션 트리거 — 컴포저의 촬영 화면을 바로 띄운다.
+    @Published private(set) var cameraTrigger: UUID?
+    /// 공유 확장 트리거 — 사진 선택기 없이 공유 보관함의 사진을 바로 컴포저에 채운다.
+    @Published private(set) var shareBatchTrigger: UUID?
+
+    private init() {}
+
+    @discardableResult
+    func handle(_ shortcutItem: UIApplicationShortcutItem) -> Bool {
+        guard shortcutItem.type == Self.cameraShortcutItemType else { return false }
+        trigger = nil
+        cameraTrigger = UUID()
+        return true
+    }
+
+    func clear(_ requestID: UUID) {
+        guard trigger == requestID else { return }
+        trigger = nil
+    }
+
+    func clearCameraTrigger(_ requestID: UUID) {
+        guard cameraTrigger == requestID else { return }
+        cameraTrigger = nil
+    }
+
+    func clearShareBatchTrigger(_ requestID: UUID) {
+        guard shareBatchTrigger == requestID else { return }
+        shareBatchTrigger = nil
+    }
+
+    /// 공유 확장이 연 `starmanager://automation` URL을 처리한다.
+    /// URL 자체는 신호일 뿐이며, 실제 사진 데이터는 항상 공유 보관함에서 읽는다.
+    @discardableResult
+    func handle(openURL url: URL) -> Bool {
+        guard url.scheme == Self.urlScheme, url.host == Self.urlHost else { return false }
+        trigger = nil
+        cameraTrigger = nil
+        checkForPendingShareBatch()
+        return true
+    }
+
+    /// 공유 확장에서 앱을 여는 데 실패해 사용자가 직접 다시 실행했을 때도,
+    /// 대기 중인 배치가 있으면 자동으로 자동화를 시작한다.
+    func checkForPendingShareBatch() {
+        guard shareBatchTrigger == nil, SharedInbox.oldestPendingBatch() != nil else { return }
+        trigger = nil
+        cameraTrigger = nil
+        shareBatchTrigger = UUID()
+    }
+
+    /// 앱이 충분히 오래 백그라운드에 머문 뒤 돌아오면 새 기본 자동화 세션을 시작한다.
+    /// 공유 확장과 카메라 퀵 액션으로 전달된 명시적인 입력은 항상 우선한다.
+    func requestFreshAutomationSession() {
+        guard shareBatchTrigger == nil,
+              cameraTrigger == nil,
+              SharedInbox.oldestPendingBatch() == nil else { return }
+        trigger = UUID()
+    }
+}
+
+final class StarManagerAppDelegate: NSObject, UIApplicationDelegate {
+    let automationCoordinator = AutomationCoordinator.shared
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        if let shortcutItem = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
+            _ = automationCoordinator.handle(shortcutItem)
+        }
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        configurationForConnecting connectingSceneSession: UISceneSession,
+        options: UIScene.ConnectionOptions
+    ) -> UISceneConfiguration {
+        if let shortcutItem = options.shortcutItem {
+            _ = automationCoordinator.handle(shortcutItem)
+        }
+        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = StarManagerSceneDelegate.self
+        return configuration
+    }
+
+    func application(
+        _ application: UIApplication,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        completionHandler(automationCoordinator.handle(shortcutItem))
+    }
+
+    func application(
+        _ app: UIApplication,
+        open url: URL,
+        options: [UIApplication.OpenURLOptionsKey: Any] = [:]
+    ) -> Bool {
+        automationCoordinator.handle(openURL: url)
+    }
+}
+
+final class StarManagerSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    func scene(
+        _ scene: UIScene,
+        willConnectTo session: UISceneSession,
+        options connectionOptions: UIScene.ConnectionOptions
+    ) {
+        if let urlContext = connectionOptions.urlContexts.first {
+            _ = AutomationCoordinator.shared.handle(openURL: urlContext.url)
+        }
+        if let shortcutItem = connectionOptions.shortcutItem {
+            _ = AutomationCoordinator.shared.handle(shortcutItem)
+        }
+    }
+
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        guard let urlContext = URLContexts.first else { return }
+        _ = AutomationCoordinator.shared.handle(openURL: urlContext.url)
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        AutomationCoordinator.shared.checkForPendingShareBatch()
+    }
+
+    func windowScene(
+        _ windowScene: UIWindowScene,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        completionHandler(AutomationCoordinator.shared.handle(shortcutItem))
+    }
+}

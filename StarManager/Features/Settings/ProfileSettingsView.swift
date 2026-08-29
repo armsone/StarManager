@@ -68,7 +68,7 @@ struct ProfileSettingsView: View {
             } header: {
                 BrandSectionTitle(title: "테마 관리", systemImage: "paintbrush.pointed.fill")
             } footer: {
-                Text("클래식을 고르면 예전 모습으로 볼 수 있어요.")
+                Text("BK는 기본 모습, 클래식은 예전 모습, 인터스텔라는 은빛과 금빛이 도는 어두운 모습이에요.")
             }
 
         }
@@ -106,7 +106,12 @@ struct ProfileSettingsView: View {
 
     private func updateAppIcon(for rawValue: String) {
         guard UIApplication.shared.supportsAlternateIcons else { return }
-        let iconName = AppearanceStyle(rawValue: rawValue) == .classic ? "AppIconClassic" : nil
+        let iconName: String?
+        switch AppearanceStyle(rawValue: rawValue) ?? .bk {
+        case .bk: iconName = nil
+        case .classic: iconName = "AppIconClassic"
+        case .interstellar: iconName = "AppIconInterstellar"
+        }
         guard UIApplication.shared.alternateIconName != iconName else { return }
         UIApplication.shared.setAlternateIconName(iconName)
     }

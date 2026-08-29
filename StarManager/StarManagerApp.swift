@@ -2,7 +2,11 @@ import SwiftUI
 
 @main
 struct StarManagerApp: App {
+    @UIApplicationDelegateAdaptor(StarManagerAppDelegate.self) private var appDelegate
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var profileStore = CreatorProfileStore()
+    @StateObject private var automationCoordinator = AutomationCoordinator.shared
+    @State private var backgroundedAt: Date?
     @AppStorage(BrandTheme.appearanceStorageKey) private var appearanceStyleRaw = AppearanceStyle.bk.rawValue
 
     private var theme: BrandTheme {
@@ -13,9 +17,25 @@ struct StarManagerApp: App {
         WindowGroup {
             ContentView()
                 .tint(theme.controlTint)
-                .preferredColorScheme(.light)
+                .preferredColorScheme(theme.style == .interstellar ? .dark : .light)
                 .environment(\.brandTheme, theme)
                 .environmentObject(profileStore)
+                .environmentObject(automationCoordinator)
+                .onChange(of: scenePhase) { _, newPhase in
+                    switch newPhase {
+                    case .background:
+                        backgroundedAt = Date()
+                    case .active:
+                        guard let backgroundedAt else { return }
+                        self.backgroundedAt = nil
+                        guard Date().timeIntervalSince(backgroundedAt) >= 15 else { return }
+                        automationCoordinator.requestFreshAutomationSession()
+                    case .inactive:
+                        break
+                    @unknown default:
+                        break
+                    }
+                }
         }
     }
 }
