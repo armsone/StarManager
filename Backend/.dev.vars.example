@@ -1,4 +1,8 @@
 # Copy to .dev.vars for local development only. Never commit real secrets.
 OPENAI_API_KEY=replace-with-openai-key
 GEMINI_API_KEY=replace-with-gemini-key
+IMANAGERAI_APP_TOKEN=replace-with-a-long-random-token
+# Legacy fallback while iOS clients transition from iManager to iManagerAI; safe to remove once no old clients remain.
+IMANAGER_APP_TOKEN=replace-with-a-long-random-token
+# Legacy fallback while iOS clients transition from StarManager to iManagerAI; safe to remove once no old clients remain.
 STARMANAGER_APP_TOKEN=replace-with-a-long-random-token

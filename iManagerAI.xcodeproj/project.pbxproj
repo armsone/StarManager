@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		100000000000000000000001 /* StarManagerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* StarManagerApp.swift */; };
+		100000000000000000000001 /* IManagerAIApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000001 /* IManagerAIApp.swift */; };
 		100000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000002 /* ContentView.swift */; };
 		100000000000000000000003 /* CreatorProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000003 /* CreatorProfile.swift */; };
 		100000000000000000000004 /* GeneratedPost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000004 /* GeneratedPost.swift */; };
@@ -23,11 +23,11 @@
 		100000000000000000000010 /* SharedInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000011 /* SharedInbox.swift */; };
 		100000000000000000000011 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000012 /* ShareViewController.swift */; };
 		100000000000000000000012 /* SharedInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 200000000000000000000011 /* SharedInbox.swift */; };
-		100000000000000000000013 /* StarManagerShare.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 200000000000000000000016 /* StarManagerShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		100000000000000000000013 /* iManagerAIShare.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 200000000000000000000016 /* iManagerAIShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		200000000000000000000001 /* StarManagerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StarManagerApp.swift; sourceTree = "<group>"; };
+		200000000000000000000001 /* IManagerAIApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IManagerAIApp.swift; sourceTree = "<group>"; };
 		200000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		200000000000000000000003 /* CreatorProfile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CreatorProfile.swift; sourceTree = "<group>"; };
 		200000000000000000000004 /* GeneratedPost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeneratedPost.swift; sourceTree = "<group>"; };
@@ -38,16 +38,16 @@
 		200000000000000000000008 /* ProfileSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProfileSettingsView.swift; sourceTree = "<group>"; };
 		200000000000000000000009 /* BrandTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandTheme.swift; sourceTree = "<group>"; };
 		20000000000000000000000A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		20000000000000000000000B /* StarManager.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = StarManager.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		20000000000000000000000B /* iManagerAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iManagerAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		20000000000000000000000C /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; lastKnownFileType = text.xml; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		20000000000000000000000F /* AutomationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationCoordinator.swift; sourceTree = "<group>"; };
 		200000000000000000000010 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		200000000000000000000011 /* SharedInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SharedInbox.swift; sourceTree = "<group>"; };
 		200000000000000000000012 /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		200000000000000000000013 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		200000000000000000000014 /* StarManagerShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StarManagerShare.entitlements; sourceTree = "<group>"; };
-		200000000000000000000015 /* StarManager.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = StarManager.entitlements; sourceTree = "<group>"; };
-		200000000000000000000016 /* StarManagerShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = StarManagerShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		200000000000000000000014 /* iManagerAIShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iManagerAIShare.entitlements; sourceTree = "<group>"; };
+		200000000000000000000015 /* iManagerAI.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = iManagerAI.entitlements; sourceTree = "<group>"; };
+		200000000000000000000016 /* iManagerAIShare.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = iManagerAIShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXContainerItemProxy section */
@@ -56,7 +56,7 @@
 			containerPortal = 700000000000000000000001 /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 500000000000000000000002;
-			remoteInfo = StarManagerShare;
+			remoteInfo = iManagerAIShare;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -67,7 +67,7 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				100000000000000000000013 /* StarManagerShare.appex in Embed App Extensions */,
+				100000000000000000000013 /* iManagerAIShare.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -95,17 +95,17 @@
 		400000000000000000000001 = {
 			isa = PBXGroup;
 			children = (
-				400000000000000000000002 /* StarManager */,
+				400000000000000000000002 /* iManagerAI */,
 				40000000000000000000000C /* Shared */,
-				40000000000000000000000D /* StarManagerShare */,
+				40000000000000000000000D /* iManagerAIShare */,
 				400000000000000000000008 /* Products */,
 			);
 			sourceTree = "<group>";
 		};
-		400000000000000000000002 /* StarManager */ = {
+		400000000000000000000002 /* iManagerAI */ = {
 			isa = PBXGroup;
 			children = (
-				200000000000000000000001 /* StarManagerApp.swift */,
+				200000000000000000000001 /* IManagerAIApp.swift */,
 				200000000000000000000002 /* ContentView.swift */,
 				20000000000000000000000F /* AutomationCoordinator.swift */,
 				400000000000000000000003 /* Models */,
@@ -115,9 +115,9 @@
 				20000000000000000000000A /* Assets.xcassets */,
 				20000000000000000000000C /* PrivacyInfo.xcprivacy */,
 				200000000000000000000010 /* Info.plist */,
-				200000000000000000000015 /* StarManager.entitlements */,
+				200000000000000000000015 /* iManagerAI.entitlements */,
 			);
-			path = StarManager;
+			path = iManagerAI;
 			sourceTree = "<group>";
 		};
 		40000000000000000000000C /* Shared */ = {
@@ -128,14 +128,14 @@
 			path = Shared;
 			sourceTree = "<group>";
 		};
-		40000000000000000000000D /* StarManagerShare */ = {
+		40000000000000000000000D /* iManagerAIShare */ = {
 			isa = PBXGroup;
 			children = (
 				200000000000000000000012 /* ShareViewController.swift */,
 				200000000000000000000013 /* Info.plist */,
-				200000000000000000000014 /* StarManagerShare.entitlements */,
+				200000000000000000000014 /* iManagerAIShare.entitlements */,
 			);
-			path = StarManagerShare;
+			path = iManagerAIShare;
 			sourceTree = "<group>";
 		};
 		400000000000000000000003 /* Models */ = {
@@ -175,8 +175,8 @@
 		400000000000000000000008 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				20000000000000000000000B /* StarManager.app */,
-				200000000000000000000016 /* StarManagerShare.appex */,
+				20000000000000000000000B /* iManagerAI.app */,
+				200000000000000000000016 /* iManagerAIShare.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -202,9 +202,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		500000000000000000000001 /* StarManager */ = {
+		500000000000000000000001 /* iManagerAI */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 600000000000000000000001 /* Build configuration list for PBXNativeTarget "StarManager" */;
+			buildConfigurationList = 600000000000000000000001 /* Build configuration list for PBXNativeTarget "iManagerAI" */;
 			buildPhases = (
 				300000000000000000000002 /* Sources */,
 				300000000000000000000001 /* Frameworks */,
@@ -216,14 +216,14 @@
 			dependencies = (
 				A00000000000000000000001 /* PBXTargetDependency */,
 			);
-			name = StarManager;
-			productName = StarManager;
-			productReference = 20000000000000000000000B /* StarManager.app */;
+			name = iManagerAI;
+			productName = iManagerAI;
+			productReference = 20000000000000000000000B /* iManagerAI.app */;
 			productType = "com.apple.product-type.application";
 		};
-		500000000000000000000002 /* StarManagerShare */ = {
+		500000000000000000000002 /* iManagerAIShare */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 600000000000000000000003 /* Build configuration list for PBXNativeTarget "StarManagerShare" */;
+			buildConfigurationList = 600000000000000000000003 /* Build configuration list for PBXNativeTarget "iManagerAIShare" */;
 			buildPhases = (
 				300000000000000000000004 /* Sources */,
 				300000000000000000000005 /* Frameworks */,
@@ -233,9 +233,9 @@
 			);
 			dependencies = (
 			);
-			name = StarManagerShare;
-			productName = StarManagerShare;
-			productReference = 200000000000000000000016 /* StarManagerShare.appex */;
+			name = iManagerAIShare;
+			productName = iManagerAIShare;
+			productReference = 200000000000000000000016 /* iManagerAIShare.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
@@ -256,7 +256,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 600000000000000000000002 /* Build configuration list for PBXProject "StarManager" */;
+			buildConfigurationList = 600000000000000000000002 /* Build configuration list for PBXProject "iManagerAI" */;
 			compatibilityVersion = "Xcode 14.0";
 			developmentRegion = ko;
 			hasScannedForEncodings = 0;
@@ -270,8 +270,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				500000000000000000000001 /* StarManager */,
-				500000000000000000000002 /* StarManagerShare */,
+				500000000000000000000001 /* iManagerAI */,
+				500000000000000000000002 /* iManagerAIShare */,
 			);
 		};
 /* End PBXProject section */
@@ -300,7 +300,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				100000000000000000000001 /* StarManagerApp.swift in Sources */,
+				100000000000000000000001 /* IManagerAIApp.swift in Sources */,
 				100000000000000000000002 /* ContentView.swift in Sources */,
 				100000000000000000000003 /* CreatorProfile.swift in Sources */,
 				100000000000000000000004 /* GeneratedPost.swift in Sources */,
@@ -329,7 +329,7 @@
 /* Begin PBXTargetDependency section */
 		A00000000000000000000001 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 500000000000000000000002 /* StarManagerShare */;
+			target = 500000000000000000000002 /* iManagerAIShare */;
 			targetProxy = 900000000000000000000001 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
@@ -345,13 +345,13 @@
 				);
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = StarManager/StarManager.entitlements;
+				CODE_SIGN_ENTITLEMENTS = iManagerAI/iManagerAI.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202608291746;
+				CURRENT_PROJECT_VERSION = 202608292118;
 				DEVELOPMENT_TEAM = T7B4EPLHPK;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = StarManager/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = StarManager;
+				INFOPLIST_FILE = iManagerAI/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = iManagerAI;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSCameraUsageDescription = "게시물에 사용할 사진을 촬영합니다.";
@@ -360,7 +360,7 @@
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationPortrait;
-				MARKETING_VERSION = 2.5.1;
+				MARKETING_VERSION = 2.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.armsone.StarManager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -380,13 +380,13 @@
 				);
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = StarManager/StarManager.entitlements;
+				CODE_SIGN_ENTITLEMENTS = iManagerAI/iManagerAI.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202608291746;
+				CURRENT_PROJECT_VERSION = 202608292118;
 				DEVELOPMENT_TEAM = T7B4EPLHPK;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = StarManager/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = StarManager;
+				INFOPLIST_FILE = iManagerAI/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = iManagerAI;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.social-networking";
 				INFOPLIST_KEY_NSCameraUsageDescription = "게시물에 사용할 사진을 촬영합니다.";
@@ -395,7 +395,7 @@
 				INFOPLIST_KEY_UIRequiresFullScreen = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = UIInterfaceOrientationPortrait;
-				MARKETING_VERSION = 2.5.1;
+				MARKETING_VERSION = 2.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.armsone.StarManager;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
@@ -514,19 +514,19 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = StarManagerShare/StarManagerShare.entitlements;
+				CODE_SIGN_ENTITLEMENTS = iManagerAIShare/iManagerAIShare.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202608291746;
+				CURRENT_PROJECT_VERSION = 202608292118;
 				DEVELOPMENT_TEAM = T7B4EPLHPK;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = StarManagerShare/Info.plist;
+				INFOPLIST_FILE = iManagerAIShare/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 2.5.1;
+				MARKETING_VERSION = 2.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.armsone.StarManager.ShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -541,19 +541,19 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
-				CODE_SIGN_ENTITLEMENTS = StarManagerShare/StarManagerShare.entitlements;
+				CODE_SIGN_ENTITLEMENTS = iManagerAIShare/iManagerAIShare.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 202608291746;
+				CURRENT_PROJECT_VERSION = 202608292118;
 				DEVELOPMENT_TEAM = T7B4EPLHPK;
 				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = StarManagerShare/Info.plist;
+				INFOPLIST_FILE = iManagerAIShare/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 2.5.1;
+				MARKETING_VERSION = 2.6.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.armsone.StarManager.ShareExtension;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
@@ -567,7 +567,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		600000000000000000000001 /* Build configuration list for PBXNativeTarget "StarManager" */ = {
+		600000000000000000000001 /* Build configuration list for PBXNativeTarget "iManagerAI" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				800000000000000000000001 /* Debug */,
@@ -576,7 +576,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		600000000000000000000002 /* Build configuration list for PBXProject "StarManager" */ = {
+		600000000000000000000002 /* Build configuration list for PBXProject "iManagerAI" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				800000000000000000000003 /* Debug */,
@@ -585,7 +585,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		600000000000000000000003 /* Build configuration list for PBXNativeTarget "StarManagerShare" */ = {
+		600000000000000000000003 /* Build configuration list for PBXNativeTarget "iManagerAIShare" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				800000000000000000000005 /* Debug */,

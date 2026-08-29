@@ -161,11 +161,11 @@ struct ComposerView: View {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 6) {
                     appIconThumbnail
-                    Text("스타메니저")
+                    Text("iManagerAI")
                         .font(.headline)
                 }
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("스타메니저")
+                .accessibilityLabel("iManagerAI")
             }
             ToolbarItem(placement: .cancellationAction) {
                 Button("취소") {
@@ -303,7 +303,7 @@ struct ComposerView: View {
                     statusMessage = "문구 복사됨 · 직접 붙여넣고, 답변은 복사해서 붙여넣기로 가져오세요"
                     if !hasShownPastePermissionGuidance {
                         hasShownPastePermissionGuidance = true
-                        statusMessage = "문구 복사됨 · 붙여넣기가 막히면 설정 > 앱 > StarManager > 다른 앱에서 붙여넣기 > 허용"
+                        statusMessage = "문구 복사됨 · 붙여넣기가 막히면 설정 > 앱 > iManagerAI > 다른 앱에서 붙여넣기 > 허용"
                     }
                 },
                 onDismiss: {
@@ -541,7 +541,7 @@ struct ComposerView: View {
 
     private var appIconThumbnail: some View {
         Group {
-            if let icon = UIApplication.shared.starManagerIcon {
+            if let icon = UIApplication.shared.iManagerAIIcon {
                 Image(uiImage: icon).resizable()
             } else {
                 Image(systemName: "star.circle.fill").resizable()
@@ -1670,7 +1670,7 @@ struct ComposerView: View {
 
     nonisolated private static func prepareShareFiles(from mediaItems: [ComposerMedia]) throws -> (items: [URL], directory: URL) {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("starmanager-share-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("imanagerai-share-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         do {
             let urls = try mediaItems.enumerated().map { index, media in
@@ -2277,7 +2277,7 @@ private struct MediaThumbnail: View {
         await Task.detached(priority: .utility) {
             let ext = media.fileExtension?.isEmpty == false ? media.fileExtension! : "mov"
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("starmanager-thumb-\(media.id.uuidString).\(ext)")
+                .appendingPathComponent("imanagerai-thumb-\(media.id.uuidString).\(ext)")
             defer { try? FileManager.default.removeItem(at: url) }
             do {
                 try media.data.write(to: url)
@@ -2698,7 +2698,7 @@ private struct ActivityView: UIViewControllerRepresentable {
 
 private extension UIApplication {
     /// 대체 아이콘이 아닌, 지금 기기에 실제 표시되는 앱 아이콘 이미지를 번들에서 읽어 온다.
-    var starManagerIcon: UIImage? {
+    var iManagerAIIcon: UIImage? {
         guard let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
               let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
               let files = primary["CFBundleIconFiles"] as? [String],
@@ -2764,7 +2764,7 @@ private struct AutomationSurfaceView: View {
             }
 
             VStack {
-                StarManagerSignatureTitle()
+                IManagerAISignatureTitle()
                     .padding(.top, 72)
                 Spacer()
             }
@@ -2971,9 +2971,9 @@ private struct AutomationResultThumbnail: View {
     }
 }
 
-private struct StarManagerSignatureTitle: View {
+private struct IManagerAISignatureTitle: View {
     var body: some View {
-        Text("Star Manager")
+        Text("iManagerAI")
             .font(.custom("SnellRoundhand-Bold", size: 38, relativeTo: .largeTitle))
             .foregroundStyle(
                 LinearGradient(

@@ -49,7 +49,7 @@ struct ProfileSettingsView: View {
             } header: {
                 BrandSectionTitle(title: "외부 로그인 관리", systemImage: "person.badge.key.fill")
             } footer: {
-                Text("브라우저 보기는 기본적으로 꺼져 있어요. 켜면 글을 만드는 과정을 처음부터 볼 수 있어요. 한 번 로그인하면 이 기기에서는 서비스가 로그아웃시키기 전까지 기억돼요. 스타매니저는 비밀번호를 보거나 저장하지 않아요.")
+                Text("브라우저 보기는 기본적으로 꺼져 있어요. 켜면 글을 만드는 과정을 처음부터 볼 수 있어요. 한 번 로그인하면 이 기기에서는 서비스가 로그아웃시키기 전까지 기억돼요. iManagerAI는 비밀번호를 보거나 저장하지 않아요.")
             }
 
             Section {

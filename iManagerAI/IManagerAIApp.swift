@@ -1,8 +1,8 @@
 import SwiftUI
 
 @main
-struct StarManagerApp: App {
-    @UIApplicationDelegateAdaptor(StarManagerAppDelegate.self) private var appDelegate
+struct IManagerAIApp: App {
+    @UIApplicationDelegateAdaptor(IManagerAIAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var profileStore = CreatorProfileStore()
     @StateObject private var automationCoordinator = AutomationCoordinator.shared

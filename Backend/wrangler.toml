@@ -1,4 +1,4 @@
-name = "starmanager-ai"
+name = "imanagerai-ai"
 main = "worker.js"
 compatibility_date = "2026-08-20"
 

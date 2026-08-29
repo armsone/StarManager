@@ -1,6 +1,6 @@
 /**
- * StarManager AI gateway for a Cloudflare Worker-compatible runtime.
- * Keep provider API keys and optional STARMANAGER_APP_TOKEN in server secrets.
+ * iManagerAI gateway for a Cloudflare Worker-compatible runtime.
+ * Keep provider API keys and optional IMANAGERAI_APP_TOKEN (legacy: IMANAGER_APP_TOKEN, STARMANAGER_APP_TOKEN) in server secrets.
  */
 export default {
   async fetch(request, env) {
@@ -19,9 +19,13 @@ export default {
       return json({ error: "지원하지 않는 요청입니다." }, 405);
     }
 
-    if (env.STARMANAGER_APP_TOKEN) {
-      const supplied = request.headers.get("X-StarManager-Token");
-      if (supplied !== env.STARMANAGER_APP_TOKEN) {
+    const expectedToken = env.IMANAGERAI_APP_TOKEN || env.IMANAGER_APP_TOKEN || env.STARMANAGER_APP_TOKEN;
+    if (expectedToken) {
+      const supplied =
+        request.headers.get("X-iManagerAI-Token") ||
+        request.headers.get("X-iManager-Token") ||
+        request.headers.get("X-StarManager-Token");
+      if (supplied !== expectedToken) {
         return json({ error: "인증되지 않은 앱 요청입니다." }, 401);
       }
     }

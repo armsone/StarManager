@@ -308,7 +308,11 @@ struct BackendCaptionGenerator: CaptionGenerating {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !accessToken.isEmpty { request.setValue(accessToken, forHTTPHeaderField: "X-StarManager-Token") }
+        if !accessToken.isEmpty {
+            request.setValue(accessToken, forHTTPHeaderField: "X-iManagerAI-Token")
+            request.setValue(accessToken, forHTTPHeaderField: "X-iManager-Token")
+            request.setValue(accessToken, forHTTPHeaderField: "X-StarManager-Token")
+        }
         request.timeoutInterval = 90
         request.httpBody = try JSONEncoder().encode(BackendCaptionRequest(
             provider: provider.rawValue,
@@ -354,7 +358,11 @@ struct BackendImageGenerator: Sendable {
         var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        if !accessToken.isEmpty { request.setValue(accessToken, forHTTPHeaderField: "X-StarManager-Token") }
+        if !accessToken.isEmpty {
+            request.setValue(accessToken, forHTTPHeaderField: "X-iManagerAI-Token")
+            request.setValue(accessToken, forHTTPHeaderField: "X-iManager-Token")
+            request.setValue(accessToken, forHTTPHeaderField: "X-StarManager-Token")
+        }
         request.timeoutInterval = 180
         request.httpBody = try JSONEncoder().encode(BackendImageRequest(
             provider: provider.rawValue,

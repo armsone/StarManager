@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>StarManager</string>
+	<string>iManagerAI</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -34,9 +34,11 @@
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>CFBundleURLName</key>
-			<string>com.armsone.StarManager</string>
+			<string>com.armsone.iManagerAI</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
+				<string>imanagerai</string>
+				<string>imanager</string>
 				<string>starmanager</string>
 			</array>
 		</dict>
@@ -49,7 +51,7 @@
 			<key>UIApplicationShortcutItemTitle</key>
 			<string>카메라</string>
 			<key>UIApplicationShortcutItemType</key>
-			<string>com.armsone.StarManager.camera</string>
+			<string>com.armsone.iManagerAI.camera</string>
 		</dict>
 	</array>
 	<key>UILaunchScreen</key>

@@ -6,8 +6,13 @@ import UIKit
 final class AutomationCoordinator: ObservableObject {
     static let shared = AutomationCoordinator()
 
-    static let cameraShortcutItemType = "com.armsone.StarManager.camera"
-    static let urlScheme = "starmanager"
+    static let cameraShortcutItemType = "com.armsone.iManagerAI.camera"
+    static let legacyCameraShortcutItemTypes: Set<String> = [
+        "com.armsone.iManager.camera",
+        "com.armsone.StarManager.camera",
+    ]
+    static let urlScheme = "imanagerai"
+    static let legacyURLSchemes: Set<String> = ["imanager", "starmanager"]
     static let urlHost = "automation"
 
     /// 설정에서 선택한 자동화 사용 여부. 사용자가 직접 켜기 전까지는 기본적으로 꺼져 있다.
@@ -39,7 +44,8 @@ final class AutomationCoordinator: ObservableObject {
 
     @discardableResult
     func handle(_ shortcutItem: UIApplicationShortcutItem) -> Bool {
-        guard shortcutItem.type == Self.cameraShortcutItemType else { return false }
+        guard shortcutItem.type == Self.cameraShortcutItemType
+            || Self.legacyCameraShortcutItemTypes.contains(shortcutItem.type) else { return false }
         trigger = nil
         cameraTrigger = UUID()
         return true
@@ -60,11 +66,13 @@ final class AutomationCoordinator: ObservableObject {
         shareBatchTrigger = nil
     }
 
-    /// 공유 확장이 연 `starmanager://automation` URL을 처리한다.
+    /// 공유 확장이 연 `imanagerai://automation` URL을 처리한다(예전 `imanager://automation`, `starmanager://automation`도 계속 받는다).
     /// URL 자체는 신호일 뿐이며, 실제 사진 데이터는 항상 공유 보관함에서 읽는다.
     @discardableResult
     func handle(openURL url: URL) -> Bool {
-        guard url.scheme == Self.urlScheme, url.host == Self.urlHost else { return false }
+        guard let scheme = url.scheme,
+              scheme == Self.urlScheme || Self.legacyURLSchemes.contains(scheme),
+              url.host == Self.urlHost else { return false }
         trigger = nil
         cameraTrigger = nil
         checkForPendingShareBatch()
@@ -91,7 +99,7 @@ final class AutomationCoordinator: ObservableObject {
     }
 }
 
-final class StarManagerAppDelegate: NSObject, UIApplicationDelegate {
+final class IManagerAIAppDelegate: NSObject, UIApplicationDelegate {
     let automationCoordinator = AutomationCoordinator.shared
 
     func application(
@@ -113,7 +121,7 @@ final class StarManagerAppDelegate: NSObject, UIApplicationDelegate {
             _ = automationCoordinator.handle(shortcutItem)
         }
         let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
-        configuration.delegateClass = StarManagerSceneDelegate.self
+        configuration.delegateClass = IManagerAISceneDelegate.self
         return configuration
     }
 
@@ -134,7 +142,7 @@ final class StarManagerAppDelegate: NSObject, UIApplicationDelegate {
     }
 }
 
-final class StarManagerSceneDelegate: UIResponder, UIWindowSceneDelegate {
+final class IManagerAISceneDelegate: UIResponder, UIWindowSceneDelegate {
     func scene(
         _ scene: UIScene,
         willConnectTo session: UISceneSession,

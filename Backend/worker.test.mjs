@@ -27,9 +27,9 @@ globalThis.fetch = async (url) => {
 const env = {
   OPENAI_API_KEY: "server-only-test-key",
   GEMINI_API_KEY: "server-only-gemini-key",
-  STARMANAGER_APP_TOKEN: "test-token",
+  IMANAGERAI_APP_TOKEN: "test-token",
 };
-const headers = { "Content-Type": "application/json", "X-StarManager-Token": "test-token" };
+const headers = { "Content-Type": "application/json", "X-iManagerAI-Token": "test-token" };
 
 const health = await worker.fetch(new Request("https://example.test/health"), env);
 assert.equal(health.status, 200);
@@ -71,6 +71,34 @@ const geminiImage = await worker.fetch(new Request("https://example.test/v1/imag
 }), env);
 assert.equal(geminiImage.status, 200);
 assert.equal((await geminiImage.json()).base64, "Z2VtaW5pLWltYWdl");
+
+const legacyIManagerHeaderCaption = await worker.fetch(new Request("https://example.test/v1/captions", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-iManager-Token": "test-token" },
+  body: JSON.stringify({ prompt: "test" }),
+}), env);
+assert.equal(legacyIManagerHeaderCaption.status, 200);
+
+const legacyHeaderCaption = await worker.fetch(new Request("https://example.test/v1/captions", {
+  method: "POST",
+  headers: { "Content-Type": "application/json", "X-StarManager-Token": "test-token" },
+  body: JSON.stringify({ prompt: "test" }),
+}), env);
+assert.equal(legacyHeaderCaption.status, 200);
+
+const legacyIManagerEnvCaption = await worker.fetch(new Request("https://example.test/v1/captions", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ prompt: "test" }),
+}), { ...env, IMANAGERAI_APP_TOKEN: undefined, IMANAGER_APP_TOKEN: "test-token" });
+assert.equal(legacyIManagerEnvCaption.status, 200);
+
+const legacyEnvCaption = await worker.fetch(new Request("https://example.test/v1/captions", {
+  method: "POST",
+  headers,
+  body: JSON.stringify({ prompt: "test" }),
+}), { ...env, IMANAGERAI_APP_TOKEN: undefined, IMANAGER_APP_TOKEN: undefined, STARMANAGER_APP_TOKEN: "test-token" });
+assert.equal(legacyEnvCaption.status, 200);
 
 const unauthorized = await worker.fetch(new Request("https://example.test/v1/captions", {
   method: "POST",
