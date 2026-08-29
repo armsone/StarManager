@@ -492,6 +492,7 @@ enum SharedGenerationSettings {
     static let moodKey = "sharedPostMood"
     static let storyWeightKey = "sharedStoryWeight"
     static let showsExternalAIBrowserKey = "showsExternalAIBrowser"
+    static let automationEnabledKey = "automationEnabled"
 }
 
 enum PostLength: String, CaseIterable, Codable, Identifiable, Sendable {

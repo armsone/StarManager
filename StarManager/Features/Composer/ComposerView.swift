@@ -204,6 +204,10 @@ struct ComposerView: View {
                 isAutomationPickerPresented = true
             }
         }
+        .onChange(of: automationCoordinator.isAutomationEnabled) { _, isEnabled in
+            guard !isEnabled else { return }
+            cancelPendingAutomationUI()
+        }
         .onChange(of: automationCoordinator.cameraTrigger, initial: true) { _, requestID in
             guard let requestID else { return }
             Task { @MainActor in
@@ -1287,6 +1291,16 @@ struct ComposerView: View {
         isAutomationPickerPresented = false
         automationPickerItems = []
         resetScrollRequest = UUID()
+    }
+
+    /// 설정에서 자동화를 끌 때 호출된다. 대기 중인 사진 선택기와 진행 중인 자동화 세션만 정리하고,
+    /// 사용자가 손으로 입력한 이야기·미디어·생성된 글은 자동화와 무관하므로 그대로 둔다.
+    @MainActor
+    private func cancelPendingAutomationUI() {
+        isAutomationPickerPresented = false
+        automationPickerItems = []
+        guard isAutomationSessionActive else { return }
+        closeAutomationSurface()
     }
 
     /// 자동화 화면의 취소/닫기 동작. 생성 중이면 AIBI 작업을 즉시 중단하고, 결과·실패 상태면 조용히 화면만 닫는다.

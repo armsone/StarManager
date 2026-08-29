@@ -10,14 +10,32 @@ final class AutomationCoordinator: ObservableObject {
     static let urlScheme = "starmanager"
     static let urlHost = "automation"
 
-    /// 일반 앱 실행 트리거 — 기존 자동화 퀵 액션과 같은 사진 선택기를 띄운다.
-    @Published private(set) var trigger: UUID? = UUID()
+    /// 설정에서 선택한 자동화 사용 여부. 사용자가 직접 켜기 전까지는 기본적으로 꺼져 있다.
+    @Published private(set) var isAutomationEnabled: Bool
+    /// 일반 앱 실행 트리거 — 자동화를 사용하는 경우 사진 선택기를 띄운다.
+    @Published private(set) var trigger: UUID?
     /// 카메라 퀵 액션 트리거 — 컴포저의 촬영 화면을 바로 띄운다.
     @Published private(set) var cameraTrigger: UUID?
     /// 공유 확장 트리거 — 사진 선택기 없이 공유 보관함의 사진을 바로 컴포저에 채운다.
     @Published private(set) var shareBatchTrigger: UUID?
 
-    private init() {}
+    private init(defaults: UserDefaults = .standard) {
+        let hasSavedPreference = defaults.object(forKey: SharedGenerationSettings.automationEnabledKey) != nil
+        let isEnabled = hasSavedPreference
+            ? defaults.bool(forKey: SharedGenerationSettings.automationEnabledKey)
+            : false
+        isAutomationEnabled = isEnabled
+        trigger = isEnabled ? UUID() : nil
+    }
+
+    /// 설정 변경은 즉시 반영하되, 켜는 순간 설정 화면 위에 사진 선택기를 띄우지는 않는다.
+    func setAutomationEnabled(_ isEnabled: Bool) {
+        UserDefaults.standard.set(isEnabled, forKey: SharedGenerationSettings.automationEnabledKey)
+        isAutomationEnabled = isEnabled
+        if !isEnabled {
+            trigger = nil
+        }
+    }
 
     @discardableResult
     func handle(_ shortcutItem: UIApplicationShortcutItem) -> Bool {
@@ -65,7 +83,8 @@ final class AutomationCoordinator: ObservableObject {
     /// 앱이 충분히 오래 백그라운드에 머문 뒤 돌아오면 새 기본 자동화 세션을 시작한다.
     /// 공유 확장과 카메라 퀵 액션으로 전달된 명시적인 입력은 항상 우선한다.
     func requestFreshAutomationSession() {
-        guard shareBatchTrigger == nil,
+        guard isAutomationEnabled,
+              shareBatchTrigger == nil,
               cameraTrigger == nil,
               SharedInbox.oldestPendingBatch() == nil else { return }
         trigger = UUID()

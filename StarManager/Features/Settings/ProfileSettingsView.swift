@@ -3,13 +3,24 @@ import UIKit
 
 struct ProfileSettingsView: View {
     @Environment(\.brandTheme) private var theme
+    @EnvironmentObject private var automationCoordinator: AutomationCoordinator
     @AppStorage(BrandTheme.appearanceStorageKey) private var appearanceStyleRaw = AppearanceStyle.bk.rawValue
+    @AppStorage(SharedGenerationSettings.automationEnabledKey) private var automationEnabled = false
     @AppStorage(SharedGenerationSettings.showsExternalAIBrowserKey) private var showsExternalAIBrowser = false
     @State private var loginProvider: ExternalAIProvider?
     @StateObject private var loginStatusStore = ExternalAILoginStatusStore()
 
     var body: some View {
         Form {
+            Section {
+                Toggle("자동화 사용", isOn: $automationEnabled)
+                    .accessibilityHint("켜면 앱을 열 때 미디어를 고른 뒤 무작위 AI로 보내는 자동화가 시작됩니다")
+            } header: {
+                BrandSectionTitle(title: "자동화", systemImage: "wand.and.sparkles")
+            } footer: {
+                Text("끄면 앱을 열거나 15초 뒤 돌아와도 자동 미디어 선택이 시작되지 않아요. 다른 앱에서 직접 공유한 사진과 카메라 퀵 액션은 계속 사용할 수 있어요.")
+            }
+
             Section {
                 Toggle("브라우저 보기", isOn: $showsExternalAIBrowser)
                     .accessibilityHint("켜면 외부 AI가 글을 만드는 브라우저를 처음부터 보여줍니다")
@@ -86,6 +97,9 @@ struct ProfileSettingsView: View {
         .onChange(of: appearanceStyleRaw) { _, newValue in
             updateAppIcon(for: newValue)
         }
+        .onChange(of: automationEnabled) { _, isEnabled in
+            automationCoordinator.setAutomationEnabled(isEnabled)
+        }
         .sheet(item: $loginProvider) { provider in
             ExternalAILoginSheet(provider: provider) {
                 loginStatusStore.markLoggedIn(provider)
@@ -122,4 +136,5 @@ struct ProfileSettingsView: View {
         ProfileSettingsView()
     }
     .environmentObject(CreatorProfileStore())
+    .environmentObject(AutomationCoordinator.shared)
 }
