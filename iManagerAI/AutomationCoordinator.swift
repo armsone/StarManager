@@ -11,6 +11,7 @@ final class AutomationCoordinator: ObservableObject {
         "com.armsone.iManager.camera",
         "com.armsone.StarManager.camera",
     ]
+    static let automationShortcutItemType = "com.armsone.iManagerAI.automation"
     static let urlScheme = "imanagerai"
     static let legacyURLSchemes: Set<String> = ["imanager", "starmanager"]
     static let urlHost = "automation"
@@ -44,6 +45,12 @@ final class AutomationCoordinator: ObservableObject {
 
     @discardableResult
     func handle(_ shortcutItem: UIApplicationShortcutItem) -> Bool {
+        // 퀵 액션의 명시적인 요청이므로 설정의 "자동화 사용" 여부와 관계없이 바로 시작한다.
+        if shortcutItem.type == Self.automationShortcutItemType {
+            cameraTrigger = nil
+            trigger = UUID()
+            return true
+        }
         guard shortcutItem.type == Self.cameraShortcutItemType
             || Self.legacyCameraShortcutItemTypes.contains(shortcutItem.type) else { return false }
         trigger = nil

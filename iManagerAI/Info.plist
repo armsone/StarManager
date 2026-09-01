@@ -53,6 +53,14 @@
 			<key>UIApplicationShortcutItemType</key>
 			<string>com.armsone.iManagerAI.camera</string>
 		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemIconSymbolName</key>
+			<string>wand.and.sparkles</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>자동화</string>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.armsone.iManagerAI.automation</string>
+		</dict>
 	</array>
 	<key>UILaunchScreen</key>
 	<dict/>

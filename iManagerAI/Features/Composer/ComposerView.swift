@@ -20,6 +20,9 @@ struct ComposerView: View {
     @Environment(\.brandTheme) private var theme
     @EnvironmentObject private var profileStore: CreatorProfileStore
     @EnvironmentObject private var automationCoordinator: AutomationCoordinator
+    @EnvironmentObject private var availabilityStore: AIProviderAvailabilityStore
+    @EnvironmentObject private var runMetricsStore: AIRunMetricsStore
+    @EnvironmentObject private var composerNavState: ComposerNavState
 
     @State private var idea = ""
     @FocusState private var isIdeaFocused: Bool
@@ -66,11 +69,14 @@ struct ComposerView: View {
     @State private var sparklesRotationAngle: Double = 0
     @State private var isWritingSettingsExpanded = false
     @State private var isAutomationPickerPresented = false
+    @State private var reservesAIChoiceScrollClearance = false
     @State private var automationPickerItems: [PhotosPickerItem] = []
     /// 퀵 액션으로 들어와 AIBI 생성이 진행 중이거나 결과/실패를 기다리는 동안 true. 전용 자동화 화면(fullScreenCover)의 표시 여부를 결정한다.
     @State private var isAutomationSessionActive = false
     @State private var automationSurfaceState: AutomationSurfaceState = .processing
     @State private var automationRelayState: AutomationRelayState = .preparing
+    /// 자동화 전체 화면 진행 표시와 하단 캐릭터에 쓰는, 지금 요청 중인 AI.
+    @State private var automationActiveChoice: AIProviderIdentity = .device
     @AppStorage("hasShownPastePermissionGuidance") private var hasShownPastePermissionGuidance = false
 
     var body: some View {
@@ -98,6 +104,19 @@ struct ComposerView: View {
             .onChange(of: resetScrollRequest) {
                 withAnimation { proxy.scrollTo("composer-top", anchor: .top) }
             }
+            .composerAIChoiceScrollSync(
+                trigger: composerNavState.aiChoiceRevealTrigger,
+                proxy: proxy,
+                onReveal: {
+                    isIdeaFocused = false
+                    reservesAIChoiceScrollClearance = true
+                }
+            )
+            .composerProgressScrollSync(
+                isGenerating: isGenerating,
+                proxy: proxy,
+                onReveal: { reservesAIChoiceScrollClearance = true }
+            )
             .task(id: externalSubmittedAt) {
                 guard let submittedAt = externalSubmittedAt else {
                     elapsedSeconds = 0
@@ -130,6 +149,7 @@ struct ComposerView: View {
                         elapsedSeconds = 0
                         statusMessage = "정보를 보냈어요"
                         automationRelayState = .waiting
+                        dismissKeyboardAfterAutomationSubmission()
                     },
                     onSuccess: { text in
                         importAIResult(text, from: provider)
@@ -250,12 +270,13 @@ struct ComposerView: View {
             mediaLoadID = loadID
             mediaLoadTask = Task {
                 await loadMedia(from: pickedItems, loadID: loadID)
-                guard mediaLoadID == loadID, !isGenerating else { return }
-                guard hasRepresentativePhoto, let provider = ExternalAIProvider.allCases.randomElement() else { return }
+                guard mediaLoadID == loadID, !isGenerating, hasRepresentativePhoto else { return }
+                let choice = randomAutomationChoice()
+                automationActiveChoice = choice
                 automationSurfaceState = .processing
                 dismissKeyboardForAutomation()
                 isAutomationSessionActive = true
-                startExternalGeneration(for: provider)
+                runAutomationGeneration(choice)
             }
         }
         .sheet(item: $sharePayload) { payload in
@@ -283,6 +304,7 @@ struct ComposerView: View {
                     elapsedSeconds = 0
                     statusMessage = "정보를 보냈어요"
                     automationRelayState = .waiting
+                    dismissKeyboardAfterAutomationSubmission()
                 },
                 onError: { message in
                     errorMessage = message
@@ -326,6 +348,7 @@ struct ComposerView: View {
                 relayMessage: automationRelayState.message,
                 resultImages: mediaItems.filter { $0.kind == .image }.map(\.data),
                 isPreparingShare: isPreparingShare,
+                activeChoice: automationActiveChoice,
                 onCancel: closeAutomationSurface,
                 onRetry: retryAutomationGeneration,
                 onShare: { Task { await share() } },
@@ -381,6 +404,40 @@ struct ComposerView: View {
                 imageGenerationPostID = nil
             }
         )
+        .composerNavSync(
+            hasSendableContentKey: !trimmedIdea.isEmpty || !mediaItems.isEmpty,
+            availabilitySignature: availabilitySignature,
+            update: updateComposerNavState,
+            sendTrigger: composerNavState.sendTrigger,
+            onSend: { requestID in
+                composerNavState.clearSendTrigger(requestID)
+                runAI(aiChoice(for: composerNavState.sendChoice))
+            }
+        )
+    }
+
+    /// onChange 비교용으로 묶은, 클라우드 제공자 켬/끔·마지막 선택의 스냅샷 문자열.
+    private var availabilitySignature: String {
+        "\(availabilityStore.isOpenAIEnabled)-\(availabilityStore.isGeminiEnabled)-\(availabilityStore.isClaudeEnabled)-\(availabilityStore.lastUsedChoice.rawValue)"
+    }
+
+    /// 하단 탭의 보내기 상태(내용 존재 여부·표시할 AI)를 항상 최신으로 유지한다.
+    @MainActor
+    private func updateComposerNavState() {
+        composerNavState.hasSendableContent = !trimmedIdea.isEmpty || !mediaItems.isEmpty
+        composerNavState.sendChoice = availabilityStore.resolvedChoice(preferring: availabilityStore.lastUsedChoice)
+    }
+
+    private func aiChoice(for identity: AIProviderIdentity) -> AIChoice {
+        guard let provider = identity.externalProvider else { return .appleIntelligence }
+        return .external(provider)
+    }
+
+    private func identity(for choice: AIChoice) -> AIProviderIdentity {
+        switch choice {
+        case .appleIntelligence: .device
+        case let .external(provider): AIProviderIdentity(externalProvider: provider) ?? .device
+        }
     }
 
     private var creationColumn: some View {
@@ -512,6 +569,17 @@ struct ComposerView: View {
 
             aiChoiceButtons
 
+            if isGenerating {
+                generatingProgressCard
+                    .transition(.opacity)
+            }
+
+            if reservesAIChoiceScrollClearance {
+                Color.clear
+                    .frame(height: 78)
+                    .id("bottom-action-scroll-target")
+            }
+
             if let message = errorMessage ?? statusMessage {
                 Label(message, systemImage: errorMessage == nil ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .font(.footnote)
@@ -540,17 +608,20 @@ struct ComposerView: View {
     }
 
     private var appIconThumbnail: some View {
-        Group {
-            if let icon = UIApplication.shared.iManagerAIIcon {
-                Image(uiImage: icon).resizable()
-            } else {
-                Image(systemName: "star.circle.fill").resizable()
-            }
-        }
+        Image(toolbarAppIconAssetName)
+        .resizable()
         .scaledToFill()
         .frame(width: 22, height: 22)
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .accessibilityHidden(true)
+    }
+
+    private var toolbarAppIconAssetName: String {
+        switch theme.style {
+        case .bk: "AppIconToolbarBK"
+        case .classic: "AppIconToolbarClassic"
+        case .interstellar: "AppIconToolbarInterstellar"
+        }
     }
 
     private var heroCopy: some View {
@@ -746,45 +817,35 @@ struct ComposerView: View {
                     .accessibilityLabel(choice.title)
                     .accessibilityHint(choice.accessibilityHint)
                 }
-            }
 
-            if isGenerating {
-                HStack(spacing: 10) {
-                    generatingStatusIcon
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(generatingStatusTitle)
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(theme.ink)
-                        Text(generatingStatusSubtitle)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        if externalSubmittedAt != nil {
-                            ProgressView(
-                                value: Double(Self.remainingExternalSeconds(elapsedSeconds)),
-                                total: Double(Self.externalGenerationTimeoutSeconds)
-                            )
-                            .progressViewStyle(.linear)
-                            .tint(BrandTheme.accent)
-                            .accessibilityLabel("AI 답변 대기 남은 시간")
-                            .accessibilityValue(Self.formatCountdown(Self.remainingExternalSeconds(elapsedSeconds)))
-                        }
+                Button {
+                    runRandomAI()
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: "die.face.5.fill")
+                            .font(.system(size: 28, weight: .semibold))
+                            .frame(width: 32, height: 32)
+                        Text("Random")
+                            .font(.system(size: 9, weight: .semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.4)
                     }
-                    Spacer()
-                    Button("취소") {
-                        cancelExternalGeneration()
+                    .foregroundStyle(theme.ink)
+                    .frame(maxWidth: .infinity, minHeight: 62)
+                    .background(
+                        theme.surface,
+                        in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    )
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 13, style: .continuous)
+                            .stroke(theme.border, lineWidth: 1)
                     }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .buttonStyle(.plain)
-                    .accessibilityHint("현재 AI 요청을 중단하고 작성 화면으로 돌아갑니다")
                 }
-                .padding(10)
-                .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(BrandTheme.accent.opacity(0.35), lineWidth: 1)
-                }
-                .transition(.opacity)
+                .buttonStyle(.plain)
+                .disabled(isRandomChoiceDisabled)
+                .opacity(isRandomChoiceDisabled ? 0.46 : 1)
+                .accessibilityLabel("Random")
+                .accessibilityHint("사용 가능한 AI 중 하나를 무작위로 골라 바로 만듭니다")
             }
 
             if let provider = pendingExternalProvider, !isGenerating {
@@ -799,23 +860,73 @@ struct ComposerView: View {
                 .accessibilityHint("\(provider.title)에서 복사한 결과를 게시물로 가져옵니다")
             }
         }
+        .id("ai-choice-buttons")
         .animation(.easeInOut(duration: 0.2), value: isGenerating)
     }
 
-    /// "게시물 준비 중" 같은 모호한 점 하나짜리 스피너 대신, AI가 작업 중임을 또렷하게 알리는 아이콘.
-    private var generatingStatusIcon: some View {
-        Image(systemName: "sparkles")
-            .font(.system(size: 23, weight: .semibold))
-            .foregroundStyle(BrandTheme.accent)
-            .frame(width: 28, height: 28)
-            .rotationEffect(.degrees(sparklesRotationAngle))
-            .accessibilityHidden(true)
-            .onAppear {
-                sparklesRotationAngle = 0
-                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
-                    sparklesRotationAngle = 360
+    private var generatingProgressCard: some View {
+        HStack(spacing: 10) {
+            generatingStatusIcon
+            VStack(alignment: .leading, spacing: 2) {
+                Text(generatingStatusTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(theme.ink)
+                Text(generatingStatusSubtitle)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if externalSubmittedAt != nil {
+                    ProgressView(
+                        value: Double(Self.remainingExternalSeconds(elapsedSeconds)),
+                        total: Double(Self.externalGenerationTimeoutSeconds)
+                    )
+                    .progressViewStyle(.linear)
+                    .tint(BrandTheme.accent)
+                    .accessibilityLabel("AI 답변 대기 남은 시간")
+                    .accessibilityValue(Self.formatCountdown(Self.remainingExternalSeconds(elapsedSeconds)))
                 }
             }
+            Spacer()
+            Button("취소") {
+                cancelExternalGeneration()
+            }
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .buttonStyle(.plain)
+            .accessibilityHint("현재 AI 요청을 중단하고 작성 화면으로 돌아갑니다")
+        }
+        .padding(10)
+        .background(theme.surface, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(BrandTheme.accent.opacity(0.35), lineWidth: 1)
+        }
+        .id("composer-progress")
+    }
+
+    /// "게시물 준비 중" 같은 모호한 점 하나짜리 스피너 대신, 지금 요청 중인 AI의 실제 아이콘을 보여주고
+    /// 요청이 진행되는 동안에만(뷰가 나타나 있는 동안만) 계속 회전시킨다.
+    private var generatingStatusIcon: some View {
+        Group {
+            if let assetName = activeExternalProvider?.assetName {
+                Image(assetName)
+                    .resizable()
+                    .scaledToFit()
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            } else {
+                Image(systemName: activeExternalProvider == nil ? "apple.logo" : "sparkles")
+                    .font(.system(size: 23, weight: .semibold))
+                    .foregroundStyle(BrandTheme.accent)
+            }
+        }
+        .frame(width: 28, height: 28)
+        .rotationEffect(.degrees(sparklesRotationAngle))
+        .accessibilityHidden(true)
+        .onAppear {
+            sparklesRotationAngle = 0
+            withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                sparklesRotationAngle = 360
+            }
+        }
     }
 
     private var generatingStatusTitle: String {
@@ -893,6 +1004,9 @@ struct ComposerView: View {
     @MainActor
     private func runAI(_ choice: AIChoice) {
         guard !isGenerating else { return }
+        if case let .external(provider) = choice, !availabilityStore.isEnabled(provider) { return }
+        dismissKeyboardForAutomation()
+        availabilityStore.recordUsed(identity(for: choice))
         switch choice {
         case .appleIntelligence:
             Task { await generateDraft() }
@@ -937,10 +1051,19 @@ struct ComposerView: View {
 
         isPreparingExternalAttachments = true
         statusMessage = "사진 \(sourceImages.count)장 준비 중…"
+        let attachmentPolicy = sourceImages.count >= 5
+            ? AIBIImageNormalizationPolicy(
+                maximumImageCount: 8,
+                maximumLongEdgePixels: 1_600,
+                maximumBytesPerImage: 1_200_000,
+                initialJPEGQuality: 0.80,
+                minimumJPEGQuality: 0.46
+            )
+            : AIBIImageNormalizationPolicy()
         externalAttachmentPreparationTask?.cancel()
         externalAttachmentPreparationTask = Task {
             let prepared = await Task.detached(priority: .userInitiated) {
-                try? AIBIImageNormalizer.normalizeOrdered(sourceImages)
+                try? AIBIImageNormalizer.normalizeOrdered(sourceImages, policy: attachmentPolicy)
             }.value
             guard !Task.isCancelled, generationID == requestID else { return }
             externalAttachmentPreparationTask = nil
@@ -1127,9 +1250,20 @@ struct ComposerView: View {
     private func isChoiceDisabled(_ choice: AIChoice) -> Bool {
         if isGenerating { return true }
         switch choice {
-        case .appleIntelligence, .external:
+        case .appleIntelligence:
+            return trimmedIdea.isEmpty && !hasRepresentativePhoto
+        case let .external(provider):
+            if !availabilityStore.isEnabled(provider) { return true }
             return trimmedIdea.isEmpty && !hasRepresentativePhoto
         }
+    }
+
+    private var isRandomChoiceDisabled: Bool {
+        isGenerating || (trimmedIdea.isEmpty && !hasRepresentativePhoto)
+    }
+
+    private func runRandomAI() {
+        runAI(aiChoice(for: randomAutomationChoice()))
     }
 
     /// 사진만 있는지, 사진과 글이 함께 있는지, 글만 있는지에 따라 외부 AI에게 보낼 문구를 자동으로 고른다.
@@ -1226,6 +1360,9 @@ struct ComposerView: View {
         )
         captionCandidates[candidate.source] = candidate
         useCandidate(candidate)
+        if let submittedAt = externalSubmittedAt, let identity = AIProviderIdentity(externalProvider: provider) {
+            runMetricsStore.recordRun(for: identity, elapsedSeconds: Date().timeIntervalSince(submittedAt))
+        }
         pendingExternalProvider = nil
         activeExternalProvider = nil
         externalSubmittedAt = nil
@@ -1318,10 +1455,11 @@ struct ComposerView: View {
         }
     }
 
-    /// 같은 선택 사진을 그대로 유지한 채, 이전 결과만 지우고 새 무작위 제공자로 재시도한다.
+    /// 같은 선택 사진을 그대로 유지한 채, 이전 결과만 지우고 새 무작위 제공자(기기 AI 포함)로 재시도한다.
     @MainActor
     private func retryAutomationGeneration() {
-        guard let provider = ExternalAIProvider.allCases.randomElement() else { return }
+        let choice = randomAutomationChoice()
+        automationActiveChoice = choice
         dismissKeyboardForAutomation()
         idea = ""
         generatedPost = nil
@@ -1332,7 +1470,27 @@ struct ComposerView: View {
         statusMessage = nil
         automationSurfaceState = .processing
         automationRelayState = .preparing
-        startExternalGeneration(for: provider)
+        runAutomationGeneration(choice)
+    }
+
+    /// 자동화가 무작위로 고를 수 있는 AI. 꺼진 클라우드 제공자는 후보에서 빠지고,
+    /// 기기 AI는 항상 후보에 포함된다.
+    private func randomAutomationChoice() -> AIProviderIdentity {
+        var pool: [AIProviderIdentity] = [.device]
+        pool.append(contentsOf: availabilityStore.enabledExternalProviders.compactMap(AIProviderIdentity.init(externalProvider:)))
+        return pool.randomElement() ?? .device
+    }
+
+    @MainActor
+    private func runAutomationGeneration(_ choice: AIProviderIdentity) {
+        availabilityStore.recordUsed(choice)
+        switch choice {
+        case .device:
+            Task { await generateDraft() }
+        case .openAI, .gemini, .claude:
+            guard let provider = choice.externalProvider else { return }
+            startExternalGeneration(for: provider)
+        }
     }
 
     private func validationContext(for signature: DraftSignature) -> CaptionValidationContext {
@@ -1372,6 +1530,7 @@ struct ComposerView: View {
             let signature = currentDraftSignature
             let post: GeneratedPost
             let source: CaptionSource
+            let deviceStartedAt = Date()
             if DeviceIntelligenceCaptionGenerator.availability == .available,
                let devicePost = try? await DeviceIntelligenceCaptionGenerator().generate(
                     from: trimmedIdea,
@@ -1381,6 +1540,7 @@ struct ComposerView: View {
                ) {
                 post = devicePost
                 source = .device
+                runMetricsStore.recordRun(for: .device, elapsedSeconds: Date().timeIntervalSince(deviceStartedAt))
             } else {
                 post = try await PreviewCaptionGenerator().generate(
                     from: trimmedIdea,
@@ -1400,9 +1560,15 @@ struct ComposerView: View {
             captionCandidates[source] = candidate
             useCandidate(candidate)
             statusMessage = validationReport(for: candidate).passesAllRules ? "완료" : "확인 필요"
+            if isAutomationSessionActive {
+                automationSurfaceState = .result(candidate.post.composedText)
+            }
         } catch {
             if generationID == requestID {
                 errorMessage = error.localizedDescription
+                if isAutomationSessionActive {
+                    automationSurfaceState = .failure(error.localizedDescription)
+                }
             }
         }
         if generationID == requestID {
@@ -1473,11 +1639,13 @@ struct ComposerView: View {
         }
         SharedInbox.deleteFiles(for: batch)
 
-        guard hasRepresentativePhoto, let provider = ExternalAIProvider.allCases.randomElement() else { return }
+        guard hasRepresentativePhoto else { return }
+        let choice = randomAutomationChoice()
+        automationActiveChoice = choice
         automationSurfaceState = .processing
         dismissKeyboardForAutomation()
         isAutomationSessionActive = true
-        startExternalGeneration(for: provider)
+        runAutomationGeneration(choice)
     }
 
     @MainActor
@@ -1504,6 +1672,20 @@ struct ComposerView: View {
             for delay in [80, 260, 520] {
                 try? await Task.sleep(for: .milliseconds(delay))
                 guard isAutomationSessionActive, browserContext == nil else { return }
+                dismissKeyboardForAutomation()
+            }
+        }
+    }
+
+    /// 웹 자동 전송 직후 WebKit이 잠깐 포커스를 되살리는 경우까지 여러 번 정리해,
+    /// 자동화 전체 화면 하단에 키보드 입력 보조 막대가 남지 않게 한다.
+    @MainActor
+    private func dismissKeyboardAfterAutomationSubmission() {
+        dismissKeyboardForAutomation()
+        Task { @MainActor in
+            for delay in [120, 420, 900] {
+                try? await Task.sleep(for: .milliseconds(delay))
+                guard isAutomationSessionActive else { return }
                 dismissKeyboardForAutomation()
             }
         }
@@ -2132,6 +2314,58 @@ private struct StarImagePlaygroundModifier: ViewModifier {
 }
 
 private extension View {
+    /// 하단 탭 보내기 상태 동기화를 별도의 작은 제네릭 함수로 분리해, 거대한 `body` 표현식 하나에
+    /// 모든 `onChange`를 이어 붙일 때 발생하는 타입 체커 시간 초과를 피한다.
+    func composerNavSync(
+        hasSendableContentKey: Bool,
+        availabilitySignature: String,
+        update: @escaping () -> Void,
+        sendTrigger: UUID?,
+        onSend: @escaping (UUID) -> Void
+    ) -> some View {
+        onChange(of: hasSendableContentKey, initial: true) { _, _ in update() }
+            .onChange(of: availabilitySignature, initial: true) { _, _ in update() }
+            .onChange(of: sendTrigger) { _, requestID in
+                guard let requestID else { return }
+                onSend(requestID)
+            }
+    }
+
+    /// 진행 카드로의 스크롤 트리거를 별도 함수로 분리해, 거대한 `body` 표현식의 타입 체커 시간 초과를 피한다.
+    func composerProgressScrollSync(
+        isGenerating: Bool,
+        proxy: ScrollViewProxy,
+        onReveal: @escaping () -> Void
+    ) -> some View {
+        onChange(of: isGenerating) { _, generating in
+            guard generating else { return }
+            onReveal()
+            Task { @MainActor in
+                await Task.yield()
+                withAnimation(.snappy(duration: 0.32)) {
+                    proxy.scrollTo("bottom-action-scroll-target", anchor: .bottom)
+                }
+            }
+        }
+    }
+
+    func composerAIChoiceScrollSync(
+        trigger: UUID?,
+        proxy: ScrollViewProxy,
+        onReveal: @escaping () -> Void
+    ) -> some View {
+        onChange(of: trigger) { _, requestID in
+            guard requestID != nil else { return }
+            onReveal()
+            Task { @MainActor in
+                await Task.yield()
+                withAnimation(.snappy(duration: 0.32)) {
+                    proxy.scrollTo("bottom-action-scroll-target", anchor: .bottom)
+                }
+            }
+        }
+    }
+
     func starImagePlaygroundSheet(
         isPresented: Binding<Bool>,
         prompt: String,
@@ -2697,13 +2931,32 @@ private struct ActivityView: UIViewControllerRepresentable {
 }
 
 private extension UIApplication {
-    /// 대체 아이콘이 아닌, 지금 기기에 실제 표시되는 앱 아이콘 이미지를 번들에서 읽어 온다.
+    /// 테마(기본 BK 또는 클래식/인터스텔라 대체 아이콘)에 맞는 일반 툴바 이미지 에셋을 읽어 온다.
+    func iManagerAIIcon(for style: AppearanceStyle = .bk) -> UIImage? {
+        let assetName: String
+        switch style {
+        case .bk:
+            assetName = "AppIconToolbarBK"
+        case .classic:
+            assetName = "AppIconToolbarClassic"
+        case .interstellar:
+            assetName = "AppIconToolbarInterstellar"
+        }
+
+        if let image = UIImage(named: assetName) {
+            return image
+        }
+
+        // 예기치 않게 이미지가 없을 경우 BK 일반 툴바 아이콘 에셋을 사용
+        if let bkImage = UIImage(named: "AppIconToolbarBK") {
+            return bkImage
+        }
+
+        return nil
+    }
+
     var iManagerAIIcon: UIImage? {
-        guard let icons = Bundle.main.infoDictionary?["CFBundleIcons"] as? [String: Any],
-              let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
-              let files = primary["CFBundleIconFiles"] as? [String],
-              let name = files.last else { return nil }
-        return UIImage(named: name)
+        iManagerAIIcon(for: .bk)
     }
 }
 
@@ -2737,6 +2990,7 @@ private struct AutomationSurfaceView: View {
     let relayMessage: String
     let resultImages: [Data]
     let isPreparingShare: Bool
+    let activeChoice: AIProviderIdentity
     let onCancel: () -> Void
     let onRetry: () -> Void
     let onShare: () -> Void
@@ -2753,6 +3007,17 @@ private struct AutomationSurfaceView: View {
                     .overlay(Color.black.opacity(0.08))
             }
             .ignoresSafeArea()
+
+            // 배경 하단의 AI 유리 버튼이 현재 제공자 표시와 자동화 닫기를 함께 담당한다.
+            VStack {
+                Spacer()
+                Button(action: onCancel) {
+                    selectedProviderGlassIcon
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("자동화 취소")
+                .accessibilityHint("현재 AI 표시가 있는 유리 버튼을 눌러 자동화를 취소합니다")
+            }
 
             switch state {
             case .processing:
@@ -2772,14 +3037,43 @@ private struct AutomationSurfaceView: View {
         .statusBarHidden()
     }
 
+    /// 사각 로고 타일을 다시 원 안에 넣지 않고, 로고 자체를 곧바로 원형으로 잘라 유리 표면으로 만든다.
+    private var selectedProviderGlassIcon: some View {
+        ZStack {
+            Color.clear
+                .frame(width: 50, height: 50)
+                .automationProviderGlass()
+                .opacity(0.28)
+
+            providerStatusLogo
+                .opacity(0.72)
+
+            Image(systemName: "xmark")
+                .font(.system(size: 13, weight: .bold, design: .rounded))
+                .foregroundStyle(.white.opacity(0.96))
+                .shadow(color: .black.opacity(0.7), radius: 2, y: 1)
+        }
+            .frame(width: 50, height: 50)
+            .padding(.bottom, 34)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var providerStatusLogo: some View {
+        if activeChoice == .device {
+            Image(systemName: "apple.logo")
+                .font(.system(size: 25, weight: .medium))
+                .foregroundStyle(.white)
+        } else {
+            activeChoice.tabIcon
+                .frame(width: 42, height: 42)
+                .clipShape(Circle())
+        }
+    }
+
     private var processingContent: some View {
         ZStack {
-            Button(action: onCancel) {
-                AutomationProgressRing()
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("자동화 취소")
-            .accessibilityHint("회전하는 포털 중앙의 닫기 버튼입니다")
+            AutomationProgressRing()
 
             EngineFlareFlyby()
 
@@ -3042,6 +3336,17 @@ private struct AutomationGlassButtonStyle: ButtonStyle {
     }
 }
 
+private extension View {
+    @ViewBuilder
+    func automationProviderGlass() -> some View {
+        if #available(iOS 26.0, *) {
+            glassEffect(.regular, in: .circle)
+        } else {
+            background(.ultraThinMaterial, in: Circle())
+        }
+    }
+}
+
 /// 출발점부터 현재 위치까지 빛의 항로가 차오르며 포털을 통과하는 엔진 불꽃.
 /// 한 번의 비행 뒤에는 잠시 쉬어, 계속 움직이면서도 진행 화면을 산만하게 만들지 않는다.
 private struct EngineFlareFlyby: View {
@@ -3161,7 +3466,7 @@ private struct EngineFlareGlyph: View {
     }
 }
 
-/// 제공자 이름이나 단계 문구 없이, 작업 중임을 보여주는 회전하는 원형 진행 링.
+/// 단계 문구 없이, 지금 요청 중인 AI의 아이콘이 링을 따라 계속 공전하며 작업 중임을 보여주는 원형 진행 링.
 private struct AutomationProgressRing: View {
     @State private var rotationAngle: Double = 0
     @State private var rotationDirection: Double = 1
@@ -3197,10 +3502,6 @@ private struct AutomationProgressRing: View {
             .frame(width: 48, height: 48)
             .rotationEffect(.degrees(rotationAngle))
 
-            Image(systemName: "xmark")
-                .font(.system(size: 17, weight: .bold, design: .rounded))
-                .foregroundStyle(.white.opacity(0.95))
-                .shadow(color: .black, radius: 3)
         }
             .frame(width: 188, height: 150)
             .accessibilityHidden(true)
@@ -3229,4 +3530,7 @@ private struct AutomationProgressRing: View {
         .environmentObject(CreatorProfileStore())
         .environmentObject(DirectAIConfigurationStore())
         .environmentObject(AutomationCoordinator.shared)
+        .environmentObject(AIProviderAvailabilityStore())
+        .environmentObject(AIRunMetricsStore())
+        .environmentObject(ComposerNavState())
 }

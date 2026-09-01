@@ -93,6 +93,7 @@ struct ExternalAIHiddenAutomatorView: View {
     @State private var hasTriggeredFallback = false
     @State private var hasAttemptedAttach = false
     @State private var attachConfirmed = false
+    @State private var hasPreparedFreshComposer = false
 
     var body: some View {
         ExternalAIWebView(provider: provider, bridge: bridge)
@@ -107,6 +108,7 @@ struct ExternalAIHiddenAutomatorView: View {
                 hasTriggeredFallback = false
                 hasAttemptedAttach = false
                 attachConfirmed = false
+                hasPreparedFreshComposer = false
             }
             .onChange(of: bridge.isAnswerStable) { _, stable in
                 guard stable, !bridge.latestAnswer.isEmpty, !hasImported, !hasTriggeredFallback else { return }
@@ -155,6 +157,22 @@ struct ExternalAIHiddenAutomatorView: View {
                 return
             }
 
+            // 제공사 웹앱이 이전 실패 초안과 첨부 카드를 로컬 세션에 복원할 수 있다.
+            // 이번 자동화 입력을 넣기 전에 반드시 깨끗한 작성창으로 만든다.
+            if bridge.isPageReady, !hasPreparedFreshComposer {
+                var prepared = false
+                for _ in 0..<8 where !prepared {
+                    prepared = await bridge.prepareFreshComposer(for: provider)
+                    if !prepared { try? await Task.sleep(nanoseconds: 300_000_000) }
+                }
+                guard prepared else {
+                    hasTriggeredFallback = true
+                    onFallback(.interaction)
+                    return
+                }
+                hasPreparedFreshComposer = true
+            }
+
             // 선택한 사진 전부를 원자적으로 첨부하지 못하면 사진을 빼고 글만 보내지 않는다.
             if !attachments.isEmpty, !attachConfirmed, bridge.isPageReady {
                 if !hasAttemptedAttach {
@@ -174,7 +192,9 @@ struct ExternalAIHiddenAutomatorView: View {
 
             if bridge.isPageReady, attachments.isEmpty || attachConfirmed {
                 checkCount += 1
-                let filled = await bridge.fillPrompt(prompt, force: false)
+                // 숨은 자동화 브라우저는 사용자 편집 화면이 아니므로 이전 초안이 있더라도
+                // 이번 요청의 정확한 문구로 교체한다.
+                let filled = await bridge.fillPrompt(prompt, force: true)
                 if filled {
                     if await submitPromptWhenReady() {
                         return
@@ -1085,7 +1105,8 @@ final class ExternalAIBrowserBridge: ObservableObject {
                 }
                 if nativeUploadPanelHandled,
                    await waitForAttachmentCount(expectedCount) {
-                    clearPendingAttachmentFiles()
+                    // 미리보기가 생긴 뒤에도 제공사가 파일 URL을 읽어 실제 업로드를 계속하므로
+                    // 전송 확인 전에는 임시 파일을 지우지 않는다.
                     return true
                 }
                 clearPendingAttachmentFiles()
@@ -1144,14 +1165,14 @@ final class ExternalAIBrowserBridge: ObservableObject {
         }
     }
 
-    private func clearPendingAttachmentFiles() {
+    fileprivate func clearPendingAttachmentFiles() {
         let directories = Set(pendingAttachmentURLs.map { $0.deletingLastPathComponent() })
         pendingAttachmentURLs = []
         directories.forEach { try? FileManager.default.removeItem(at: $0) }
     }
 
     private func waitForAttachmentCount(_ expectedCount: Int) async -> Bool {
-        for _ in 0..<80 {
+        for _ in 0..<240 {
             if await attachmentPreviewCount() == expectedCount { return true }
             try? await Task.sleep(nanoseconds: 250_000_000)
         }
@@ -1160,6 +1181,16 @@ final class ExternalAIBrowserBridge: ObservableObject {
 
     func isAttachmentCountConfirmed(_ expectedCount: Int) async -> Bool {
         await attachmentPreviewCount() == expectedCount
+    }
+
+    /// 이전 자동화에서 남은 문구와 실패/대기 첨부 카드를 제거한다.
+    func prepareFreshComposer(for provider: ExternalAIProvider) async -> Bool {
+        guard let webView else { return false }
+        _ = try? await webView.evaluateJavaScript(
+            ExternalAIBrowserScripts.resetComposerScript(for: provider)
+        )
+        try? await Task.sleep(nanoseconds: 180_000_000)
+        return await attachmentPreviewCount() == 0
     }
 
     private func attachmentPreviewCount() async -> Int? {
@@ -1186,7 +1217,18 @@ final class ExternalAIBrowserBridge: ObservableObject {
             let verified = try await webView.evaluateJavaScript(
                 "window.__starManagerDidSubmit && window.__starManagerDidSubmit();"
             )
-            return Self.boolean(from: verified)
+            let didSubmit = Self.boolean(from: verified)
+            if didSubmit {
+                // 자동 입력 뒤 웹 입력창이 첫 응답자로 남으면 전체 화면 위에 iOS의
+                // 이전/다음/완료 입력 보조 막대가 나타난다. 전송 확인 직후 포커스를 끊는다.
+                _ = try? await webView.evaluateJavaScript(
+                    "document.activeElement && document.activeElement.blur(); window.getSelection && window.getSelection().removeAllRanges(); true;"
+                )
+                webView.endEditing(true)
+                webView.resignFirstResponder()
+                clearPendingAttachmentFiles()
+            }
+            return didSubmit
         } catch {
             return false
         }
@@ -1301,6 +1343,7 @@ private struct ExternalAIWebView: UIViewRepresentable {
         uiView.stopLoading()
         uiView.navigationDelegate = nil
         uiView.uiDelegate = nil
+        coordinator.releasePendingAttachmentFiles()
     }
 
     @MainActor
@@ -1309,6 +1352,10 @@ private struct ExternalAIWebView: UIViewRepresentable {
 
         init(bridge: ExternalAIBrowserBridge) {
             self.bridge = bridge
+        }
+
+        func releasePendingAttachmentFiles() {
+            bridge.clearPendingAttachmentFiles()
         }
 
         @available(iOS 18.4, *)
@@ -1400,6 +1447,70 @@ private enum ExternalAIBrowserScripts {
             return "\"\""
         }
         return literal
+    }
+
+    static func resetComposerScript(for provider: ExternalAIProvider) -> String {
+        let config = selectors(for: provider)
+        return """
+        (function() {
+          const inputSelectors = \(jsArray(config.input));
+          const attachmentSelectors = \(jsArray(config.attachmentConfirmed));
+
+          function first(selectors) {
+            for (const selector of selectors) {
+              try {
+                const element = document.querySelector(selector);
+                if (element) return element;
+              } catch (e) {}
+            }
+            return null;
+          }
+
+          const input = first(inputSelectors);
+          if (input) {
+            input.focus();
+            if (input.tagName === 'TEXTAREA' || input.tagName === 'INPUT') {
+              const proto = input.tagName === 'TEXTAREA'
+                ? window.HTMLTextAreaElement.prototype
+                : window.HTMLInputElement.prototype;
+              const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+              if (setter) setter.call(input, ''); else input.value = '';
+            } else if (input.isContentEditable) {
+              input.replaceChildren(document.createElement('p'));
+            }
+            input.dispatchEvent(new InputEvent('input', {
+              bubbles: true,
+              composed: true,
+              inputType: 'deleteContentBackward',
+              data: null
+            }));
+            input.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+            input.blur();
+          }
+
+          const tiles = [];
+          for (const selector of attachmentSelectors) {
+            try {
+              for (const tile of document.querySelectorAll(selector)) {
+                if (!tiles.includes(tile)) tiles.push(tile);
+              }
+            } catch (e) {}
+          }
+          for (const tile of tiles) {
+            const buttons = Array.from(tile.querySelectorAll('button, [role="button"]'));
+            const remove = buttons.find(function(button) {
+              const label = [
+                button.getAttribute('aria-label'),
+                button.getAttribute('title'),
+                button.textContent
+              ].filter(Boolean).join(' ').toLocaleLowerCase();
+              return /remove|delete|close|dismiss|삭제|제거|닫기/.test(label);
+            }) || buttons[buttons.length - 1];
+            if (remove) remove.click();
+          }
+          return true;
+        })();
+        """
     }
 
     static func openPhotoPanelScript(for provider: ExternalAIProvider) -> String {

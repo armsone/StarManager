@@ -4,6 +4,8 @@ import UIKit
 struct ProfileSettingsView: View {
     @Environment(\.brandTheme) private var theme
     @EnvironmentObject private var automationCoordinator: AutomationCoordinator
+    @EnvironmentObject private var availabilityStore: AIProviderAvailabilityStore
+    @EnvironmentObject private var runMetricsStore: AIRunMetricsStore
     @AppStorage(BrandTheme.appearanceStorageKey) private var appearanceStyleRaw = AppearanceStyle.bk.rawValue
     @AppStorage(SharedGenerationSettings.automationEnabledKey) private var automationEnabled = false
     @AppStorage(SharedGenerationSettings.showsExternalAIBrowserKey) private var showsExternalAIBrowser = false
@@ -22,34 +24,57 @@ struct ProfileSettingsView: View {
             }
 
             Section {
-                Toggle("브라우저 보기", isOn: $showsExternalAIBrowser)
-                    .accessibilityHint("켜면 외부 AI가 글을 만드는 브라우저를 처음부터 보여줍니다")
-
-                ForEach(ExternalAIProvider.allCases) { provider in
-                    let status = loginStatusStore.status(for: provider)
-                    Button {
-                        loginProvider = provider
-                    } label: {
-                        HStack {
-                            Text(provider.title).foregroundStyle(.primary)
-                            Spacer()
-                            Label(status.title, systemImage: status.iconName)
-                                .labelStyle(.titleAndIcon)
-                                .font(.footnote)
-                                .foregroundStyle(status.color)
+                ForEach(AIProviderIdentity.allCases) { identity in
+                    HStack(alignment: .top, spacing: 12) {
+                        identity.tabIcon
+                            .frame(width: 28, height: 28)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(identity.title).foregroundStyle(.primary)
+                            Text(lastRunSubtitle(for: identity))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if identity == .device {
+                            Text("항상 켜짐")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        } else {
+                            VStack(alignment: .trailing, spacing: 6) {
+                                Toggle("", isOn: availabilityBinding(for: identity))
+                                    .labelsHidden()
+                                    .accessibilityLabel("\(identity.title) 사용, \(availabilityStore.isEnabled(identity) ? "켜짐" : "꺼짐")")
+                                if let provider = identity.externalProvider {
+                                    let status = loginStatusStore.status(for: provider)
+                                    Button {
+                                        loginProvider = provider
+                                    } label: {
+                                        Label(status.title, systemImage: status.iconName)
+                                            .labelStyle(.titleAndIcon)
+                                            .font(.footnote)
+                                            .foregroundStyle(status.color)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .accessibilityLabel("\(identity.title) 로그인, \(status.title)")
+                                    .accessibilityHint(
+                                        status == .loggedIn
+                                            ? "\(identity.title) 계정 페이지를 앱 안에서 다시 엽니다"
+                                            : "\(identity.title) 공식 로그인 페이지를 앱 안에서 엽니다"
+                                    )
+                                }
+                            }
                         }
                     }
-                    .accessibilityLabel("\(provider.title), \(status.title)")
-                    .accessibilityHint(
-                        status == .loggedIn
-                            ? "\(provider.title) 계정 페이지를 앱 안에서 다시 엽니다"
-                            : "\(provider.title) 공식 로그인 페이지를 앱 안에서 엽니다"
-                    )
                 }
+
+                Divider()
+
+                Toggle("브라우저 보기", isOn: $showsExternalAIBrowser)
+                    .accessibilityHint("켜면 외부 AI가 글을 만드는 브라우저를 처음부터 보여줍니다")
             } header: {
-                BrandSectionTitle(title: "외부 로그인 관리", systemImage: "person.badge.key.fill")
+                BrandSectionTitle(title: "AI 사용 및 로그인", systemImage: "checklist")
             } footer: {
-                Text("브라우저 보기는 기본적으로 꺼져 있어요. 켜면 글을 만드는 과정을 처음부터 볼 수 있어요. 한 번 로그인하면 이 기기에서는 서비스가 로그아웃시키기 전까지 기억돼요. iManagerAI는 비밀번호를 보거나 저장하지 않아요.")
+                Text("끈 AI는 스튜디오와 자동화에서 선택할 수 없어요. 클라우드 AI를 모두 꺼도 아이폰 AI는 계속 쓸 수 있어요. 로그인 상태를 눌러 계정 페이지를 열 수 있어요. 브라우저 보기는 기본적으로 꺼져 있고, 켜면 글을 만드는 과정을 처음부터 볼 수 있어요. 한 번 로그인하면 이 기기에서는 서비스가 로그아웃시키기 전까지 기억돼요. iManagerAI는 비밀번호를 보거나 저장하지 않아요.")
             }
 
             Section {
@@ -107,6 +132,21 @@ struct ProfileSettingsView: View {
         }
     }
 
+    private func availabilityBinding(for identity: AIProviderIdentity) -> Binding<Bool> {
+        Binding(
+            get: { availabilityStore.isEnabled(identity) },
+            set: { availabilityStore.setEnabled($0, for: identity) }
+        )
+    }
+
+    private func lastRunSubtitle(for identity: AIProviderIdentity) -> String {
+        guard let metric = runMetricsStore.metric(for: identity) else { return "아직 실행 안 함" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M/d HH:mm"
+        let elapsed = String(format: "%.1f", metric.elapsedSeconds)
+        return "마지막 실행 \(formatter.string(from: metric.lastRunAt)) · \(elapsed)초 걸림"
+    }
+
     private static var appVersionText: String {
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "-"
         let build = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "-"
@@ -122,9 +162,9 @@ struct ProfileSettingsView: View {
         guard UIApplication.shared.supportsAlternateIcons else { return }
         let iconName: String?
         switch AppearanceStyle(rawValue: rawValue) ?? .bk {
-        case .bk: iconName = nil
+        case .bk: iconName = "AppIconBK"
         case .classic: iconName = "AppIconClassic"
-        case .interstellar: iconName = "AppIconInterstellar"
+        case .interstellar: iconName = nil
         }
         guard UIApplication.shared.alternateIconName != iconName else { return }
         UIApplication.shared.setAlternateIconName(iconName)
@@ -137,4 +177,6 @@ struct ProfileSettingsView: View {
     }
     .environmentObject(CreatorProfileStore())
     .environmentObject(AutomationCoordinator.shared)
+    .environmentObject(AIProviderAvailabilityStore())
+    .environmentObject(AIRunMetricsStore())
 }
