@@ -9,6 +9,7 @@ final class ComposerNavState: ObservableObject {
     /// 보내기 항목에 표시할, 마지막으로 선택했거나 켜져 있는 AI.
     @Published var sendChoice: AIProviderIdentity = .device
     @Published private(set) var sendTrigger: UUID?
+    @Published private(set) var instagramShareTrigger: UUID?
     @Published private(set) var aiChoiceRevealTrigger: UUID?
 
     func requestSend() {
@@ -18,6 +19,15 @@ final class ComposerNavState: ObservableObject {
     func clearSendTrigger(_ id: UUID) {
         guard sendTrigger == id else { return }
         sendTrigger = nil
+    }
+
+    func requestInstagramShare() {
+        instagramShareTrigger = UUID()
+    }
+
+    func clearInstagramShareTrigger(_ id: UUID) {
+        guard instagramShareTrigger == id else { return }
+        instagramShareTrigger = nil
     }
 
     func requestAIChoiceReveal() {

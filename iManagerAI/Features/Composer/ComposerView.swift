@@ -73,6 +73,8 @@ struct ComposerView: View {
     @State private var automationPickerItems: [PhotosPickerItem] = []
     /// 퀵 액션으로 들어와 AIBI 생성이 진행 중이거나 결과/실패를 기다리는 동안 true. 전용 자동화 화면(fullScreenCover)의 표시 여부를 결정한다.
     @State private var isAutomationSessionActive = false
+    /// 카메라 퀵 액션에서 실제로 사진을 찍어 온 경우에만 이전 작업을 비우기 위한 예약 표시. 촬영 취소 시에는 아무것도 지우지 않는다.
+    @State private var pendingCameraResetOnCapture = false
     @State private var automationSurfaceState: AutomationSurfaceState = .processing
     @State private var automationRelayState: AutomationRelayState = .preparing
     /// 자동화 전체 화면 진행 표시와 하단 캐릭터에 쓰는, 지금 요청 중인 AI.
@@ -219,7 +221,6 @@ struct ComposerView: View {
                 guard automationCoordinator.trigger == requestID else { return }
                 automationCoordinator.clear(requestID)
                 dismissKeyboardForAutomation()
-                resetComposer()
                 await Task.yield()
                 isAutomationPickerPresented = true
             }
@@ -235,7 +236,7 @@ struct ComposerView: View {
                 guard automationCoordinator.cameraTrigger == requestID else { return }
                 automationCoordinator.clearCameraTrigger(requestID)
                 dismissKeyboardForAutomation()
-                resetComposer()
+                pendingCameraResetOnCapture = true
                 await Task.yield()
                 openCamera()
             }
@@ -247,7 +248,6 @@ struct ComposerView: View {
                 guard automationCoordinator.shareBatchTrigger == requestID else { return }
                 automationCoordinator.clearShareBatchTrigger(requestID)
                 dismissKeyboardForAutomation()
-                resetComposer()
                 await Task.yield()
                 await importPendingShareBatch()
             }
@@ -255,7 +255,7 @@ struct ComposerView: View {
         .photosPicker(
             isPresented: $isAutomationPickerPresented,
             selection: $automationPickerItems,
-            maxSelectionCount: max(1, Self.maxMediaItems - mediaItems.count),
+            maxSelectionCount: Self.maxMediaItems,
             selectionBehavior: .ordered,
             matching: .images,
             photoLibrary: .shared()
@@ -265,13 +265,16 @@ struct ComposerView: View {
             dismissKeyboardForAutomation()
             let pickedItems = items
             automationPickerItems = []
-            mediaLoadTask?.cancel()
+            resetComposer()
             let loadID = UUID()
             mediaLoadID = loadID
             mediaLoadTask = Task {
                 await loadMedia(from: pickedItems, loadID: loadID)
                 guard mediaLoadID == loadID, !isGenerating, hasRepresentativePhoto else { return }
-                let choice = randomAutomationChoice()
+                guard let choice = randomAutomationChoice() else {
+                    errorMessage = Self.noRandomProviderMessage
+                    return
+                }
                 automationActiveChoice = choice
                 automationSurfaceState = .processing
                 dismissKeyboardForAutomation()
@@ -375,7 +378,7 @@ struct ComposerView: View {
             guard context == nil, isAutomationSessionActive else { return }
             dismissKeyboardAfterBrowserDismissal()
         }
-        .fullScreenCover(isPresented: $showsCamera) {
+        .fullScreenCover(isPresented: $showsCamera, onDismiss: { pendingCameraResetOnCapture = false }) {
             CameraCaptureView(
                 maxCount: Self.maxMediaItems,
                 currentCount: mediaItems.count,
@@ -412,6 +415,11 @@ struct ComposerView: View {
             onSend: { requestID in
                 composerNavState.clearSendTrigger(requestID)
                 runAI(aiChoice(for: composerNavState.sendChoice))
+            },
+            instagramShareTrigger: composerNavState.instagramShareTrigger,
+            onInstagramShare: { requestID in
+                composerNavState.clearInstagramShareTrigger(requestID)
+                Task { await share() }
             }
         )
     }
@@ -1259,11 +1267,17 @@ struct ComposerView: View {
     }
 
     private var isRandomChoiceDisabled: Bool {
-        isGenerating || (trimmedIdea.isEmpty && !hasRepresentativePhoto)
+        isGenerating
+            || (trimmedIdea.isEmpty && !hasRepresentativePhoto)
+            || availabilityStore.enabledExternalProviders.isEmpty
     }
 
     private func runRandomAI() {
-        runAI(aiChoice(for: randomAutomationChoice()))
+        guard let choice = randomAutomationChoice() else {
+            errorMessage = Self.noRandomProviderMessage
+            return
+        }
+        runAI(aiChoice(for: choice))
     }
 
     /// 사진만 있는지, 사진과 글이 함께 있는지, 글만 있는지에 따라 외부 AI에게 보낼 문구를 자동으로 고른다.
@@ -1427,6 +1441,7 @@ struct ComposerView: View {
         automationRelayState = .preparing
         isAutomationPickerPresented = false
         automationPickerItems = []
+        pendingCameraResetOnCapture = false
         resetScrollRequest = UUID()
     }
 
@@ -1455,10 +1470,13 @@ struct ComposerView: View {
         }
     }
 
-    /// 같은 선택 사진을 그대로 유지한 채, 이전 결과만 지우고 새 무작위 제공자(기기 AI 포함)로 재시도한다.
+    /// 같은 선택 사진을 그대로 유지한 채, 이전 결과만 지우고 새 무작위 클라우드 제공자로 재시도한다.
     @MainActor
     private func retryAutomationGeneration() {
-        let choice = randomAutomationChoice()
+        guard let choice = randomAutomationChoice() else {
+            automationSurfaceState = .failure(Self.noRandomProviderMessage)
+            return
+        }
         automationActiveChoice = choice
         dismissKeyboardForAutomation()
         idea = ""
@@ -1473,13 +1491,15 @@ struct ComposerView: View {
         runAutomationGeneration(choice)
     }
 
-    /// 자동화가 무작위로 고를 수 있는 AI. 꺼진 클라우드 제공자는 후보에서 빠지고,
-    /// 기기 AI는 항상 후보에 포함된다.
-    private func randomAutomationChoice() -> AIProviderIdentity {
-        var pool: [AIProviderIdentity] = [.device]
-        pool.append(contentsOf: availabilityStore.enabledExternalProviders.compactMap(AIProviderIdentity.init(externalProvider:)))
-        return pool.randomElement() ?? .device
+    /// 무작위 선택(랜덤 버튼·자동화)이 고를 수 있는 AI. 꺼진 클라우드 제공자는 후보에서 빠지고,
+    /// 기기 AI(온디바이스)는 무작위 후보에 포함하지 않는다. 켜진 클라우드 제공자가 없으면 nil.
+    private func randomAutomationChoice() -> AIProviderIdentity? {
+        availabilityStore.enabledExternalProviders
+            .compactMap(AIProviderIdentity.init(externalProvider:))
+            .randomElement()
     }
+
+    private static let noRandomProviderMessage = "무작위로 고를 수 있는 클라우드 AI가 없어요. 설정에서 AI를 켜거나 직접 선택해 주세요."
 
     @MainActor
     private func runAutomationGeneration(_ choice: AIProviderIdentity) {
@@ -1630,6 +1650,7 @@ struct ComposerView: View {
             return
         }
 
+        resetComposer()
         mediaItems = Array(loaded.prefix(Self.maxMediaItems))
         do {
             try SharedInbox.removeBatch(id: batch.id)
@@ -1640,7 +1661,10 @@ struct ComposerView: View {
         SharedInbox.deleteFiles(for: batch)
 
         guard hasRepresentativePhoto else { return }
-        let choice = randomAutomationChoice()
+        guard let choice = randomAutomationChoice() else {
+            errorMessage = Self.noRandomProviderMessage
+            return
+        }
         automationActiveChoice = choice
         automationSurfaceState = .processing
         dismissKeyboardForAutomation()
@@ -1780,6 +1804,11 @@ struct ComposerView: View {
 
     @MainActor
     private func addCameraPhotos(_ photos: [Data]) {
+        let shouldResetForAutomation = pendingCameraResetOnCapture
+        pendingCameraResetOnCapture = false
+        if shouldResetForAutomation, !photos.isEmpty {
+            resetComposer()
+        }
         let availableCount = max(0, Self.maxMediaItems - mediaItems.count)
         let accepted = photos.prefix(availableCount)
         guard !accepted.isEmpty else { return }
@@ -2321,13 +2350,19 @@ private extension View {
         availabilitySignature: String,
         update: @escaping () -> Void,
         sendTrigger: UUID?,
-        onSend: @escaping (UUID) -> Void
+        onSend: @escaping (UUID) -> Void,
+        instagramShareTrigger: UUID?,
+        onInstagramShare: @escaping (UUID) -> Void
     ) -> some View {
         onChange(of: hasSendableContentKey, initial: true) { _, _ in update() }
             .onChange(of: availabilitySignature, initial: true) { _, _ in update() }
             .onChange(of: sendTrigger) { _, requestID in
                 guard let requestID else { return }
                 onSend(requestID)
+            }
+            .onChange(of: instagramShareTrigger) { _, requestID in
+                guard let requestID else { return }
+                onInstagramShare(requestID)
             }
     }
 

@@ -1,6 +1,6 @@
 import SwiftUI
 
-private enum ComposerTab: Hashable, CaseIterable { case composer, newAction, settings }
+private enum ComposerTab: Hashable, CaseIterable { case composer, instagramShare, newAction, settings }
 
 struct ContentView: View {
     private let tabBarBottomSpacing: CGFloat = 8
@@ -12,14 +12,19 @@ struct ContentView: View {
 
     var body: some View {
         ZStack(alignment: .bottom) {
-            Group {
+            // 설정 탭을 오가도 작성 중인 이야기·미디어·결과가 사라지지 않도록,
+            // 컴포저는 분기로 파괴하지 않고 항상 유지한 채 설정 화면을 위에 덮는다.
+            ZStack {
+                NavigationStack {
+                    ComposerView(resetRequest: resetRequest)
+                }
+                .opacity(selectedTab == .settings ? 0 : 1)
+                .allowsHitTesting(selectedTab != .settings)
+                .accessibilityHidden(selectedTab == .settings)
+
                 if selectedTab == .settings {
                     NavigationStack {
                         ProfileSettingsView()
-                    }
-                } else {
-                    NavigationStack {
-                        ComposerView(resetRequest: resetRequest)
                     }
                 }
             }
@@ -42,6 +47,10 @@ struct ContentView: View {
         .ignoresSafeArea(.keyboard, edges: .bottom)
         .environmentObject(composerNavState)
         .onChange(of: selectedTab) { _, newValue in
+            if newValue == .instagramShare {
+                selectedTab = .composer
+                DispatchQueue.main.async { composerNavState.requestInstagramShare() }
+            }
             if newValue == .newAction {
                 resetRequest = UUID()
                 selectedTab = .composer
@@ -113,6 +122,10 @@ private struct FloatingTabBar: View {
                     onLongPress()
                 }
             )
+
+            tabButton(title: "Instagram", icon: Image(systemName: "paperplane.circle.fill"), tab: .instagramShare) {
+                selectedTab = .instagramShare
+            }
 
             tabButton(title: "New", icon: Image(systemName: "arrow.counterclockwise.circle.fill"), tab: .newAction) {
                 selectedTab = .newAction
