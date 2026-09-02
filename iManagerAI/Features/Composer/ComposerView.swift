@@ -68,6 +68,8 @@ struct ComposerView: View {
     @State private var isPreparingExternalAttachments = false
     @State private var sparklesRotationAngle: Double = 0
     @State private var isWritingSettingsExpanded = false
+    /// 접힘 상태 카드 높이를 원래 자연 높이의 정확히 2배로 만들기 위한 헤더 실측 높이.
+    @State private var writingSettingsHeaderHeight: CGFloat?
     @State private var isAutomationPickerPresented = false
     @State private var reservesAIChoiceScrollClearance = false
     @State private var automationPickerItems: [PhotosPickerItem] = []
@@ -666,6 +668,9 @@ struct ComposerView: View {
                     Image(systemName: isWritingSettingsExpanded ? "chevron.up" : "chevron.down")
                         .font(.caption.weight(.bold))
                 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { writingSettingsHeaderHeight = $0 }
+                // 접힘 상태에서는 2배 높이 카드 전체가 탭 영역이 되도록 헤더를 채운다.
+                .frame(maxHeight: isWritingSettingsExpanded ? nil : .infinity)
                 .foregroundStyle(theme.ink)
                 .contentShape(Rectangle())
             }
@@ -771,6 +776,9 @@ struct ComposerView: View {
             }
         }
         .controlSize(.small)
+        // 접힘 상태 전체 높이(헤더 + 상하 패딩 10×2)가 자연 높이의 정확히 2배가 되도록,
+        // 패딩 안쪽 콘텐츠를 (헤더×2 + 20)으로 고정한다. 펼침 상태는 손대지 않는다.
+        .frame(height: isWritingSettingsExpanded ? nil : writingSettingsHeaderHeight.map { $0 * 2 + 20 })
         .padding(10)
         .background(theme.canvas, in: RoundedRectangle(cornerRadius: 14))
         .overlay {

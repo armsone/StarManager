@@ -4,6 +4,9 @@ private enum ComposerTab: Hashable, CaseIterable { case composer, instagramShare
 
 struct ContentView: View {
     private let tabBarBottomSpacing: CGFloat = 8
+    private let tabBarHeight: CGFloat = 64
+    /// 플로팅 탭바 위에서 콘텐츠가 가려지지 않고 완전히 멈출 수 있도록 하는 최소 여백.
+    private let contentBottomClearance: CGFloat = 12
 
     @State private var selectedTab = ComposerTab.composer
     @State private var resetRequest = UUID()
@@ -28,7 +31,9 @@ struct ContentView: View {
                     }
                 }
             }
-            .safeAreaPadding(.bottom, 72)
+            // 탭바 전체 점유 높이(하단 간격 + 바 높이)에 여백을 더해,
+            // 스크롤 콘텐츠·컴포저·접힌 스타일 패널이 플로팅 바에 덮이지 않고 그 위에 온전히 놓이게 한다.
+            .safeAreaPadding(.bottom, tabBarBottomSpacing + tabBarHeight + contentBottomClearance)
 
             FloatingTabBar(
                 selectedTab: $selectedTab,
