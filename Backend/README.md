@@ -1,4 +1,4 @@
-# iManagerAI Backend
+# Stargram Backend
 
 OpenAI API 키를 iPhone 앱에 넣지 않고 서버에서 보호하기 위한 최소 AI 게이트웨이입니다.
 

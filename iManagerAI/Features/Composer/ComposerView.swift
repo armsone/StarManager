@@ -185,11 +185,11 @@ struct ComposerView: View {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 6) {
                     appIconThumbnail
-                    Text("iManagerAI")
+                    Text("Stargram")
                         .font(.headline)
                 }
                 .accessibilityElement(children: .combine)
-                .accessibilityLabel("iManagerAI")
+                .accessibilityLabel("Stargram")
             }
             ToolbarItem(placement: .cancellationAction) {
                 Button("취소") {
@@ -330,7 +330,7 @@ struct ComposerView: View {
                     statusMessage = "문구 복사됨 · 직접 붙여넣고, 답변은 복사해서 붙여넣기로 가져오세요"
                     if !hasShownPastePermissionGuidance {
                         hasShownPastePermissionGuidance = true
-                        statusMessage = "문구 복사됨 · 붙여넣기가 막히면 설정 > 앱 > iManagerAI > 다른 앱에서 붙여넣기 > 허용"
+                        statusMessage = "문구 복사됨 · 붙여넣기가 막히면 설정 > 앱 > Stargram > 다른 앱에서 붙여넣기 > 허용"
                     }
                 },
                 onDismiss: {
@@ -3314,7 +3314,7 @@ private struct AutomationResultThumbnail: View {
 
 private struct IManagerAISignatureTitle: View {
     var body: some View {
-        Text("iManagerAI")
+        Text("Stargram")
             .font(.custom("SnellRoundhand-Bold", size: 38, relativeTo: .largeTitle))
             .foregroundStyle(
                 LinearGradient(

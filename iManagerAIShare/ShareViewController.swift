@@ -23,7 +23,7 @@ final class ShareViewController: UIViewController {
     private let statusLabel = UILabel()
     private let descriptionLabel = UILabel()
     private let actionButtonsStack = UIStackView()
-    private lazy var openAppButton = makeActionButton(title: "iManagerAI 열기", action: #selector(openApp))
+    private lazy var openAppButton = makeActionButton(title: "Stargram 열기", action: #selector(openApp))
     private lazy var retryButton = makeActionButton(title: "다시 시도", action: #selector(retryImport))
     private let cancelButton = UIButton(type: .system)
     private let stack = UIStackView()
@@ -506,8 +506,8 @@ final class ShareViewController: UIViewController {
             openAppButton.isHidden = false
             statusLabel.isHidden = false
             descriptionLabel.isHidden = false
-            statusLabel.text = wasAutomatic ? "자동으로 열리지 않았어요" : "iManagerAI를 열지 못했어요"
-            descriptionLabel.text = "사진은 안전하게 저장돼 있어요. 아래 버튼으로 iManagerAI를 열면 이어서 진행돼요."
+            statusLabel.text = wasAutomatic ? "자동으로 열리지 않았어요" : "Stargram을 열지 못했어요"
+            descriptionLabel.text = "사진은 안전하게 저장돼 있어요. 아래 버튼으로 Stargram을 열면 이어서 진행돼요."
         }
     }
 

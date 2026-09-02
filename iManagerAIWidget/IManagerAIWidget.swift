@@ -19,7 +19,7 @@ struct LaunchProvider: TimelineProvider {
     }
 }
 
-/// 잠금 화면 앱 실행 위젯. 탭하면 iManagerAI가 열린다.
+/// 잠금 화면 앱 실행 위젯. 탭하면 Stargram이 열린다.
 struct IManagerAIWidgetView: View {
     var body: some View {
         ZStack {
@@ -32,7 +32,7 @@ struct IManagerAIWidgetView: View {
                 .widgetAccentable()
         }
         .unredacted()
-        .accessibilityLabel("iManagerAI 열기")
+        .accessibilityLabel("Stargram 열기")
         .widgetURL(URL(string: "imanagerai://open"))
         .containerBackground(.clear, for: .widget)
     }
@@ -44,8 +44,8 @@ struct IManagerAIWidget: Widget {
         StaticConfiguration(kind: "com.armsone.StarManager.launch.v7", provider: LaunchProvider()) { _ in
             IManagerAIWidgetView()
         }
-        .configurationDisplayName("iManagerAI 열기")
-        .description("잠금 화면에서 iManagerAI를 바로 엽니다.")
+        .configurationDisplayName("Stargram 열기")
+        .description("잠금 화면에서 Stargram을 바로 엽니다.")
         .supportedFamilies([.accessoryCircular])
     }
 }

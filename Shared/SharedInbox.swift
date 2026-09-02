@@ -18,7 +18,7 @@ enum SharedInbox {
 
         var errorDescription: String? {
             switch self {
-            case .appGroupUnavailable: "iManagerAI 공동 보관함을 열 수 없습니다."
+            case .appGroupUnavailable: "Stargram 공동 보관함을 열 수 없습니다."
             case .invalidFilename: "안전하지 않은 공유 파일 이름입니다."
             case let .lockFailed(code): "공유 보관함을 잠글 수 없습니다. (\(code))"
             }

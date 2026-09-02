@@ -1,4 +1,4 @@
-# iManagerAI
+# Stargram
 
 이야기 한 줄을 인스타그램 게시물로 완성하는 iOS/iPadOS 앱입니다.
 
