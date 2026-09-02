@@ -33,6 +33,7 @@ struct ContentView: View {
             FloatingTabBar(
                 selectedTab: $selectedTab,
                 hasSendableContent: composerNavState.hasSendableContent,
+                hasShareableContent: composerNavState.hasShareableContent,
                 sendChoice: composerNavState.sendChoice,
                 onSend: { composerNavState.requestSend() },
                 onLongPress: {
@@ -74,6 +75,7 @@ struct ContentView: View {
 private struct FloatingTabBar: View {
     @Binding var selectedTab: ComposerTab
     let hasSendableContent: Bool
+    let hasShareableContent: Bool
     let sendChoice: AIProviderIdentity
     let onSend: () -> Void
     let onLongPress: () -> Void
@@ -123,11 +125,11 @@ private struct FloatingTabBar: View {
                 }
             )
 
-            tabButton(title: "Instagram", icon: Image(systemName: "paperplane.circle.fill"), tab: .instagramShare) {
+            tabButton(title: "GoI", icon: Image(systemName: "square.and.arrow.up"), tab: .instagramShare, isEnabled: hasShareableContent) {
                 selectedTab = .instagramShare
             }
 
-            tabButton(title: "New", icon: Image(systemName: "arrow.counterclockwise.circle.fill"), tab: .newAction) {
+            tabButton(title: "New", icon: Image(systemName: "arrow.counterclockwise.circle.fill"), tab: .newAction, isEnabled: hasSendableContent) {
                 selectedTab = .newAction
             }
 
@@ -140,7 +142,7 @@ private struct FloatingTabBar: View {
         .shadow(color: .black.opacity(0.12), radius: 18, y: 8)
     }
 
-    private func tabButton(title: String, icon: Image, tab: ComposerTab, action: @escaping () -> Void) -> some View {
+    private func tabButton(title: String, icon: Image, tab: ComposerTab, isEnabled: Bool = true, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 3) {
                 icon
@@ -160,6 +162,8 @@ private struct FloatingTabBar: View {
             }
         }
         .buttonStyle(.plain)
+        .disabled(!isEnabled)
+        .opacity(isEnabled ? 1 : 0.5)
         .accessibilityLabel(title)
     }
 

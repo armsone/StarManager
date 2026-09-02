@@ -6,6 +6,8 @@ import Foundation
 final class ComposerNavState: ObservableObject {
     /// 사진/영상 또는 비어 있지 않은 글이 캔버스에 있는지 여부.
     @Published var hasSendableContent = false
+    /// 글과 미디어가 모두 있어 공유 경로(`share()`) 가드를 통과할 수 있는지 여부.
+    @Published var hasShareableContent = false
     /// 보내기 항목에 표시할, 마지막으로 선택했거나 켜져 있는 AI.
     @Published var sendChoice: AIProviderIdentity = .device
     @Published private(set) var sendTrigger: UUID?

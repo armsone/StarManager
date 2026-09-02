@@ -409,6 +409,7 @@ struct ComposerView: View {
         )
         .composerNavSync(
             hasSendableContentKey: !trimmedIdea.isEmpty || !mediaItems.isEmpty,
+            hasShareableContentKey: !trimmedIdea.isEmpty && !mediaItems.isEmpty,
             availabilitySignature: availabilitySignature,
             update: updateComposerNavState,
             sendTrigger: composerNavState.sendTrigger,
@@ -433,6 +434,7 @@ struct ComposerView: View {
     @MainActor
     private func updateComposerNavState() {
         composerNavState.hasSendableContent = !trimmedIdea.isEmpty || !mediaItems.isEmpty
+        composerNavState.hasShareableContent = !trimmedIdea.isEmpty && !mediaItems.isEmpty
         composerNavState.sendChoice = availabilityStore.resolvedChoice(preferring: availabilityStore.lastUsedChoice)
     }
 
@@ -2347,6 +2349,7 @@ private extension View {
     /// 모든 `onChange`를 이어 붙일 때 발생하는 타입 체커 시간 초과를 피한다.
     func composerNavSync(
         hasSendableContentKey: Bool,
+        hasShareableContentKey: Bool,
         availabilitySignature: String,
         update: @escaping () -> Void,
         sendTrigger: UUID?,
@@ -2355,6 +2358,7 @@ private extension View {
         onInstagramShare: @escaping (UUID) -> Void
     ) -> some View {
         onChange(of: hasSendableContentKey, initial: true) { _, _ in update() }
+            .onChange(of: hasShareableContentKey, initial: true) { _, _ in update() }
             .onChange(of: availabilitySignature, initial: true) { _, _ in update() }
             .onChange(of: sendTrigger) { _, requestID in
                 guard let requestID else { return }
